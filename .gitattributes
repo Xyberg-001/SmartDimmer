@@ -1,0 +1,15 @@
+# Normalise line endings in the repository (LF); Git checks out with the platform default.
+* text=auto
+
+*.ahk  text
+*.html text
+*.md   text
+*.ps1  text
+*.txt  text
+
+# binaries
+*.png binary
+*.ico binary
+*.dll binary
+*.exe binary
+*.zip binary
