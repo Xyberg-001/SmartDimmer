@@ -1,0 +1,20 @@
+# build outputs
+dist/
+*.exe
+!src/lib/*.dll
+
+# files the running app creates next to the exe
+SmartDimmerSettings.ini
+SmartDimmerDebug.log
+SmartDimmer.lnk
+# extracted at runtime by the compiled exe (kept in src/lib as the sources)
+/SmartDimmerUI.html
+/WebView2Loader.dll
+
+# editors / OS
+.vs/
+.vscode/
+Thumbs.db
+desktop.ini
+*.bak
+*.tmp

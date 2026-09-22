@@ -1,0 +1,509 @@
+<!doctype html>
+<!--
+  Smart Dimmer - user interface (rendered by Microsoft Edge WebView2, hosted by src/SmartDimmer.ahk)
+  https://github.com/Xyberg-001/SmartDimmer    Licence: MIT (see LICENSE)
+  The engine pushes a JSON state ({type:"state", ...}); the page renders it and sends "command|arg|arg"
+  strings back through chrome.webview.postMessage. See docs/ARCHITECTURE.md.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Dimmer</title>
+<style>
+:root{
+  --bg:#1B1B1F; --panel:#2A2A31; --line:#35353D; --text:#F2F2F2; --muted:#A3A3AD; --accent:#FFA24A;
+  --btn:#2A2A31; --btnText:#F2F2F2; --check:#FFA24A; --track:#35353D; --fill:#FFA24A; --thumb:#FFA24A;
+  --graphBg:#262525; --grid:#6E6E6E;
+  --r:16px; --shadow:0 14px 36px rgba(0,0,0,.45);
+  --op:65%;
+  /* derived surfaces: solid by default, translucent in glass mode */
+  --surface:var(--bg); --panelS:var(--panel);
+  --accent2:color-mix(in srgb,var(--accent) 72%,#fff 28%);
+  --hl:inset 0 1px 0 rgba(255,255,255,.055);
+}
+*{box-sizing:border-box}
+html{height:100%;background:transparent}
+body{height:100%;margin:0;background:var(--bg);color:var(--text);font:14px/1.4 "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  -webkit-user-select:none;user-select:none;overflow:hidden;transition:background .35s,color .35s}
+/* glass mode: the window shows the blurred desktop through a tinted page (see ApplyGlass in the engine) */
+html.glass{--surface:color-mix(in srgb,var(--bg) 55%,transparent);--panelS:color-mix(in srgb,var(--panel) 62%,transparent)}
+html.glass body{background:color-mix(in srgb,var(--bg) var(--op),transparent);border-radius:var(--wr,14px);overflow:hidden}
+/* glass + Wallpaper theme: a frosted copy of the wallpaper region behind the window, aligned to the screen, over the real acrylic */
+#wp{position:fixed;left:-40px;top:-40px;right:-40px;bottom:-40px;z-index:0;display:none;background-repeat:no-repeat;filter:blur(22px) saturate(1.25);opacity:.88;pointer-events:none}
+#wp::after{content:"";position:absolute;inset:0;background:color-mix(in srgb,var(--bg) var(--op),transparent)}
+html.wp #wp{display:block}
+html.wp body{background:transparent}
+#app{position:relative;z-index:1}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px;border:2px solid var(--bg)}
+::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+a{color:var(--accent)}
+
+/* ---------- header (drag handle) ---------- */
+.hdr{display:flex;align-items:center;gap:12px;padding:12px 16px 10px;background:linear-gradient(180deg,var(--panelS),transparent);border-bottom:1px solid color-mix(in srgb,var(--line) 80%,transparent);cursor:default;app-region:drag;-webkit-app-region:drag}
+.hdr button{app-region:no-drag;-webkit-app-region:no-drag}
+.hdr .logo{width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,var(--accent2),color-mix(in srgb,var(--accent) 55%,#000));box-shadow:0 0 22px color-mix(in srgb,var(--accent) 45%,transparent),var(--hl);
+  display:grid;place-items:center;font-size:18px;animation:glow 4s ease-in-out infinite}
+@keyframes glow{0%,100%{box-shadow:0 0 14px color-mix(in srgb,var(--accent) 35%,transparent)}50%{box-shadow:0 0 30px color-mix(in srgb,var(--accent) 65%,transparent)}}
+.hdr .t{flex:1;min-width:0}
+.hdr .t b{display:block;font-size:17px;color:var(--accent);letter-spacing:.2px}
+.hdr .t span{font-size:11.5px;color:var(--muted)}
+.icon-btn{width:34px;height:34px;border-radius:10px;border:1px solid transparent;background:transparent;color:var(--muted);display:grid;place-items:center;font-size:16px;transition:background .15s,color .15s,transform .1s}
+.icon-btn:hover{background:var(--panelS);color:var(--text)}
+.icon-btn:active{transform:scale(.94)}
+.icon-btn.close:hover{background:#c0392b;color:#fff}
+.icon-btn.big{width:44px;height:44px;font-size:24px;border-radius:12px;color:var(--accent)}
+.icon-btn.big:hover{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent)}
+
+/* ---------- layout ---------- */
+#app{height:100%;display:flex;flex-direction:column}
+.scroll{flex:1;overflow:auto;padding:14px 16px 16px}
+.sec{margin:14px 0 6px;font-size:11px;font-weight:700;letter-spacing:1.4px;color:var(--accent);text-transform:uppercase;display:flex;align-items:center;gap:10px}
+.sec::after{content:"";flex:1;height:1px;background:var(--line)}
+.card{background:linear-gradient(160deg,color-mix(in srgb,var(--panelS) 94%,#fff 6%),var(--panelS));border:1px solid color-mix(in srgb,var(--line) 85%,transparent);border-radius:var(--r);padding:14px 16px;margin-top:10px;
+  box-shadow:var(--hl),0 6px 18px rgba(0,0,0,.22);transition:transform .2s,box-shadow .2s,border-color .2s,background .35s}
+.card:hover{transform:translateY(-1px);box-shadow:var(--hl),var(--shadow);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
+.row{display:flex;align-items:center;gap:12px}
+.row.between{justify-content:space-between}
+.muted{color:var(--muted);font-size:12.5px}
+.small{font-size:11.5px}
+.reveal{animation:fadeUp .35s ease both}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.stagger>*{animation:fadeUp .4s ease both}
+.stagger>*:nth-child(2){animation-delay:.05s}.stagger>*:nth-child(3){animation-delay:.1s}.stagger>*:nth-child(4){animation-delay:.15s}.stagger>*:nth-child(5){animation-delay:.2s}.stagger>*:nth-child(6){animation-delay:.25s}
+
+/* ---------- controls ---------- */
+.btn{background:var(--btn);color:var(--btnText);border:1px solid var(--line);border-radius:11px;padding:8px 14px;font-weight:600;box-shadow:var(--hl);transition:transform .1s,filter .15s,border-color .15s,background .35s,box-shadow .2s;white-space:nowrap}
+.btn:hover{filter:brightness(1.15);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:linear-gradient(135deg,var(--accent2),var(--accent));color:#141416;border-color:transparent;box-shadow:0 4px 14px color-mix(in srgb,var(--accent) 35%,transparent)}
+.btn.primary:hover{box-shadow:0 6px 20px color-mix(in srgb,var(--accent) 50%,transparent)}
+.btn.ghost{background:transparent;box-shadow:none}
+.btn.sm{padding:5px 10px;font-size:12.5px;border-radius:9px}
+.btn.danger:hover{background:#c0392b;color:#fff}
+.btn:disabled{opacity:.5;cursor:default;filter:none;transform:none}
+.field{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:7px 10px;color:var(--text);outline:none;transition:border-color .15s,box-shadow .15s}
+.field:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent)}
+.field.center{text-align:center}
+/* switch */
+.sw{position:relative;display:inline-flex;align-items:center;gap:10px;cursor:pointer}
+.sw input{position:absolute;opacity:0;width:0;height:0}
+.sw .k{width:42px;height:24px;border-radius:24px;background:var(--track);border:1px solid var(--line);position:relative;transition:background .25s,border-color .25s;flex:none}
+.sw .k::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--muted);transition:transform .25s cubic-bezier(.34,1.56,.64,1),background .25s}
+.sw input:checked+.k{background:linear-gradient(135deg,color-mix(in srgb,var(--check) 75%,#fff 25%),var(--check));border-color:var(--check);box-shadow:0 0 12px color-mix(in srgb,var(--check) 40%,transparent)}
+.sw input:checked+.k::after{transform:translateX(18px);background:#141416}
+.sw input:focus-visible+.k{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 30%,transparent)}
+/* checkbox */
+.cb{display:inline-flex;align-items:center;gap:9px;cursor:pointer}
+.cb input{position:absolute;opacity:0;width:0;height:0}
+.cb .b{width:20px;height:20px;border-radius:6px;border:1.5px solid var(--muted);background:var(--surface);display:grid;place-items:center;transition:all .2s;flex:none}
+.cb .b::after{content:"";width:6px;height:11px;border:solid #141416;border-width:0 2.5px 2.5px 0;transform:rotate(45deg) scale(0);transition:transform .2s cubic-bezier(.34,1.56,.64,1);margin-top:-3px}
+.cb input:checked+.b{background:var(--check);border-color:var(--check)}
+.cb input:checked+.b::after{transform:rotate(45deg) scale(1)}
+/* slider */
+.sl{display:block;margin-top:6px}
+.sl .lab{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.sl .lab .n{color:var(--muted)}
+.sl .lab .v{font-size:22px;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums;transition:transform .15s}
+.sl .lab .v.bump{transform:scale(1.15)}
+.sl.small .lab .v{font-size:16px}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:26px;background:transparent;margin:0}
+input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:6px;background:linear-gradient(90deg,color-mix(in srgb,var(--fill) 80%,#fff 20%) 0,var(--fill) var(--p,50%),var(--track) var(--p,50%) 100%);transition:background .2s}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:var(--thumb);margin-top:-7px;border:3px solid var(--bg);box-shadow:0 2px 8px rgba(0,0,0,.5),0 0 10px color-mix(in srgb,var(--thumb) 35%,transparent);transition:transform .15s,box-shadow .15s}
+input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.15);box-shadow:0 0 0 6px color-mix(in srgb,var(--thumb) 25%,transparent)}
+input[type=range]:active::-webkit-slider-thumb{transform:scale(1.25)}
+input[type=range]:disabled{opacity:.4}
+/* segmented */
+.seg{display:inline-flex;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
+.seg button{border:0;background:transparent;color:var(--muted);padding:5px 12px;border-radius:8px;font-weight:600;transition:all .2s}
+.seg button.on{background:linear-gradient(135deg,var(--accent2),var(--accent));color:#141416}
+/* chips */
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12px;color:var(--muted)}
+.chip.on{border-color:var(--accent);color:var(--accent)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.chip.on .dot{background:var(--accent);box-shadow:0 0 8px var(--accent);animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+/* monitor card */
+.mon{position:relative;overflow:hidden}
+.mon .ind{margin-top:10px;border-left:3px solid var(--accent);padding-left:12px;max-height:0;opacity:0;transition:max-height .45s cubic-bezier(.2,.7,.2,1),opacity .35s,margin .35s;margin-top:0}
+.mon.split .ind{max-height:220px;opacity:1;margin-top:10px}
+.mon .name{font-weight:700;font-size:15px}
+.mon .badge{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--surface);border:1px solid var(--line);color:var(--muted)}
+.mon.split .badge{color:var(--accent);border-color:var(--accent)}
+.note{font-size:11.5px;color:var(--muted);margin-top:8px}
+kbd{background:var(--surface);border:1px solid var(--line);border-bottom-width:2px;border-radius:7px;padding:3px 9px;font-weight:600;font-size:12.5px;min-width:64px;display:inline-block;text-align:center;cursor:pointer;transition:all .15s}
+kbd:hover{border-color:var(--accent);color:var(--accent)}
+kbd.cap{background:var(--accent);color:#141416;border-color:var(--accent);animation:pulse 1s infinite}
+kbd.empty{color:var(--muted)}
+/* settings layout */
+.settings{display:flex;flex:1;min-height:0}
+.nav{width:200px;flex:none;border-right:1px solid color-mix(in srgb,var(--line) 80%,transparent);padding:12px 10px;display:flex;flex-direction:column;gap:4px;background:color-mix(in srgb,var(--panelS) 55%,transparent)}
+.nav button{text-align:left;border:0;background:transparent;color:var(--muted);padding:9px 12px;border-radius:10px;font-weight:600;display:flex;gap:10px;align-items:center;transition:all .2s}
+.nav button:hover{background:var(--panelS);color:var(--text)}
+.nav button.on{background:linear-gradient(135deg,var(--accent2),var(--accent));color:#141416;box-shadow:0 4px 14px color-mix(in srgb,var(--accent) 30%,transparent)}
+.nav .spacer{flex:1}
+.content{flex:1;overflow:auto;padding:6px 22px 24px}
+.page{display:none}.page.on{display:block}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.theme-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:10px}
+.theme{border:2px solid var(--line);border-radius:12px;padding:10px;cursor:pointer;transition:all .2s;background:var(--surface)}
+.theme:hover{transform:translateY(-2px)}
+.theme.on{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent)}
+.theme .sw3{display:flex;gap:4px;margin-top:6px}
+.theme .sw3 i{flex:1;height:14px;border-radius:5px}
+.swatches{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;margin-top:8px}
+.swatch{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px}
+.swatch label{position:relative;width:64px;height:28px;border-radius:8px;border:1px solid var(--line);overflow:hidden;cursor:pointer}
+.swatch input{position:absolute;inset:-6px;width:calc(100% + 12px);height:calc(100% + 12px);border:0;padding:0;cursor:pointer}
+canvas#curve{width:100%;height:190px;border-radius:10px;border:1px solid var(--line);background:var(--graphBg);display:block}
+table.hk{width:100%;border-collapse:separate;border-spacing:0 6px}
+table.hk th{font-weight:600;color:var(--muted);font-size:11.5px;text-align:center}
+table.hk td:first-child{font-weight:600;white-space:nowrap}
+table.hk td{text-align:center}
+table.sch{width:100%;border-collapse:separate;border-spacing:0 6px}
+table.sch th{color:var(--muted);font-size:11.5px;font-weight:600;text-align:left}
+table.sch td{padding:0 4px}
+.status{font-size:12.5px;color:var(--muted);line-height:1.5}
+.toast{position:fixed;z-index:60;left:50%;bottom:18px;transform:translate(-50%,20px);background:var(--panelS);border:1px solid var(--accent);color:var(--text);padding:9px 16px;border-radius:12px;opacity:0;transition:all .3s;pointer-events:none;box-shadow:var(--shadow);font-size:13px}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.hidden{display:none!important}
+/* thin strip over the header so presses on the very top edge reach the page (resize) instead of the native drag region */
+#gripTop{position:fixed;top:0;left:0;right:0;height:6px;z-index:50;app-region:no-drag;-webkit-app-region:no-drag}
+</style>
+</head>
+<body>
+<div id="wp"></div>
+<div id="gripTop"></div>
+<div id="app"></div>
+<div id="toast" class="toast"></div>
+<script>
+'use strict';
+const post = (...a) => window.chrome?.webview?.postMessage(a.join('|'));
+const VIEW = window.SD_VIEW || 'flyout';
+let S = null;                       // last state from AutoHotkey
+let capturing = '';                 // "master:HWUp" or "mon:2:SWUp" while a hotkey is being captured
+let page = 'brightness';            // settings nav
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const KINDS = ['HWUp','HWDown','SWUp','SWDown'];
+const KIND_LABEL = {HWUp:'Hardware ▲',HWDown:'Hardware ▼',SWUp:'Software ▲',SWDown:'Software ▼'};
+let toastT;
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('on'),1800); }
+
+/* ---------- theme ---------- */
+function applyTheme(t){
+  const r=document.documentElement.style;
+  const map={bg:'bg',input:'panel',line:'line',text:'text',muted:'muted',accent:'accent',btnFace:'btn',btnText:'btnText',checkOn:'check',sliderTrack:'track',sliderFill:'fill',sliderThumb:'thumb',graphBg:'graphBg',grid:'grid'};
+  for(const k in map) if(t[k]) r.setProperty('--'+map[k],'#'+t[k]);
+  document.documentElement.classList.toggle('glass', !!(S&&S.glass));
+  if(S) r.setProperty('--op', (S.glassOpacity||65)+'%');
+  r.setProperty('--wr', (window.SD_RADIUS||14)+'px');
+  applyWallpaperLayer();
+}
+/* frosted wallpaper layer (glass + Wallpaper theme): the engine sends the image URL, the screen size and the
+   window's offset on that screen; the image is laid out like Windows "Fill" (cover, centred) and shifted so the
+   part under the window lines up with the real wallpaper. */
+let wpImg=null, wpNat=null;
+function applyWallpaperLayer(){
+  const on = !!(S && S.glass && S.wpFrost && S.theme==='Wallpaper' && S.wp && S.wp.img);
+  document.documentElement.classList.toggle('wp', on);
+  if(!on) return;
+  const el=$('#wp');
+  if(wpImg!==S.wp.img){
+    wpImg=S.wp.img; wpNat=null; el.style.backgroundImage=`url("${wpImg}")`;
+    const im=new Image(); im.onload=()=>{ wpNat=[im.naturalWidth, im.naturalHeight]; positionWallpaper(); }; im.src=wpImg;
+  }
+  positionWallpaper();
+}
+function positionWallpaper(x, y){
+  if(!wpNat || !S || !S.wp) return;
+  if(x===undefined){ x=S.wp.x; y=S.wp.y; }
+  const el=$('#wp'), d=devicePixelRatio||1;
+  const sw=S.wp.sw/d, sh=S.wp.sh/d, wx=x/d, wy=y/d;
+  const sc=Math.max(sw/wpNat[0], sh/wpNat[1]), w=wpNat[0]*sc, h=wpNat[1]*sc;
+  el.style.backgroundSize=`${w}px ${h}px`;
+  el.style.backgroundPosition=`${(sw-w)/2 - wx + 40}px ${(sh-h)/2 - wy + 40}px`;
+}
+
+/* ---------- widgets ---------- */
+function slider(id,label,val,cmd,small){
+  return `<div class="sl ${small?'small':''}"><div class="lab"><span class="n">${label}</span><span class="v" id="v_${id}">${val}%</span></div>
+  <input type="range" min="0" max="100" value="${val}" id="${id}" data-cmd="${cmd}" style="--p:${val}%"></div>`;
+}
+/* live readout + fill while the user drags (the state push later confirms the same value) */
+function sliderMoved(el){
+  const v=+el.value, min=+el.min||0, max=+el.max||100;
+  el.style.setProperty('--p',((v-min)/(max-min)*100)+'%');
+  const o=$('#v_'+el.id);
+  if(o){ o.textContent=(el.dataset.scale ? (v*+el.dataset.scale).toFixed(1) : v)+(el.dataset.suffix??'%'); o.classList.add('bump'); setTimeout(()=>o.classList.remove('bump'),150); }
+}
+function sw(id,label,on,cmd){ return `<label class="sw"><input type="checkbox" id="${id}" ${on?'checked':''} data-cmd="${cmd}"><span class="k"></span><span>${label}</span></label>`; }
+function cb(id,label,on,cmd){ return `<label class="cb"><input type="checkbox" id="${id}" ${on?'checked':''} data-cmd="${cmd}"><span class="b"></span><span>${label}</span></label>`; }
+function keyBox(val,id){ const cap=capturing===id; return `<kbd class="${cap?'cap':(val?'':'empty')}" data-cap="${id}" title="Click, then press keys. Esc clears.">${cap?'Press…':(esc(val)||'–')}</kbd>`; }
+
+/* ---------- one set of delegated listeners: survives every re-render, nothing to rebind ---------- */
+const app = $('#app');
+app.addEventListener('input', e=>{
+  const el=e.target;
+  if(el.type==='range' && el.dataset.cmd){ sliderMoved(el); post(...el.dataset.cmd.split('|'), el.value); }
+  else if(el.type==='color' && el.dataset.slot) el.parentElement.style.background=el.value;
+});
+app.addEventListener('change', e=>{
+  const el=e.target;
+  if(el.type==='checkbox' && el.dataset.cmd) post(...el.dataset.cmd.split('|'), el.checked?1:0);
+  else if(el.id==='targets' || el.id==='targets2') post('setTargets', el.value);
+  else if(el.dataset.sched) post('sched','row',...el.dataset.sched.split('|'), el.value);
+  else if(el.type==='color' && el.dataset.slot) post('setThemeColor', el.dataset.slot, el.value.slice(1).toUpperCase());
+});
+app.addEventListener('click', e=>{
+  const k=e.target.closest('kbd[data-cap]');
+  if(k){ capturing=k.dataset.cap; render(); post('capture',...capturing.split(':')); }
+});
+app.addEventListener('mousedown', e=>{
+  if(window.SD_NATIVE_DRAG) return;
+  if(e.button===0 && e.target.closest('#hdr') && !e.target.closest('button')) post('drag');
+});
+
+/* ---------- header ---------- */
+function header(sub, closeCmd){
+  const right = VIEW==='flyout'
+    ? `<button class="icon-btn" title="Swap primary display" onclick="post('flipPrimary')">⇄</button><button class="icon-btn" title="Identify monitors" onclick="post('identify')">👁</button><button class="icon-btn big" title="Settings" onclick="post('openSettings')">⚙</button>`
+    : `<button class="icon-btn close" title="Close" onclick="post('${closeCmd}')">✕</button>`;
+  return `<div class="hdr" id="hdr"><div class="logo">☀</div><div class="t"><b>Smart Dimmer</b><span>${sub}</span></div>${right}</div>`;
+}
+
+/* ---------- flyout ---------- */
+function renderFlyout(){
+  const anySplit = S.monitors.some(m=>m.split);
+  let h = header(`v${S.version} · drag to move`, 'closeFlyout') + `<div class="scroll stagger">`;
+  h += `<div class="sec">Targets</div><div class="card"><div class="row between">
+      <div class="row"><span class="muted">Targets</span><input class="field center" id="targets" value="${esc(S.targets)}" style="width:64px"></div>
+      <button class="btn sm ${S.linkAll?'primary':''}" onclick="post('toggleLinkAll')">${S.linkAll?'🔗 All linked':'⛓ Link all'}</button></div>
+      <div class="row between" style="margin-top:10px">${sw('schedOn','Schedule',S.sched.enabled,'sched|enabled')}
+      <span class="chip ${S.sched.enabled?'on':''}"><i class="dot"></i>${S.sched.enabled?'On':'Off'}</span></div>
+      <div class="note">${S.monitors.map(m=>`${m.idx} = ${esc(m.name)}`).join(' · ')}</div></div>`;
+  h += `<div class="sec">Master brightness</div>`;
+  if(anySplit) h += `<div class="note">Master sliders hidden while a monitor is Independent.</div>`;
+  else h += `<div class="card">${slider('hw','Hardware backlight',S.hw,'setHW')}${slider('sw','Software brightness',S.sw,'setSW')}
+      <div style="margin-top:10px">${sw('link','Move hardware and software together',S.linkHWSW,'setLinkHWSW')}</div></div>`;
+  h += `<div class="sec">Per-monitor</div>`;
+  for(const m of S.monitors){
+    h += `<div class="card mon ${m.split?'split':''}"><div class="row between"><div class="row"><span class="name">${esc(m.name)}</span><span class="badge">#${m.idx}</span>${cb('dim'+m.idx,'Dim',m.dim,'setDim|'+m.idx)}</div>
+      <button class="btn sm" onclick="post('toggleSplit',${m.idx})">${m.split?'🔓 Independent':'🔗 Follows master'}</button></div>
+      <div class="ind">${slider('mhw'+m.idx,'Hardware',m.hw,'setMonHW|'+m.idx,true)}${slider('msw'+m.idx,'Software',m.sw,'setMonSW|'+m.idx,true)}</div></div>`;
+  }
+  h += `</div>`;
+  return h;
+}
+
+/* ---------- settings ---------- */
+const NAV=[['brightness','☀','Brightness'],['monitors','🖥','Monitors & keys'],['schedule','⏰','Schedule'],['appearance','🎨','Appearance'],['defaults','💾','Defaults']];
+function renderSettings(){
+  const anySplit = S.monitors.some(m=>m.split);
+  let h = header('Settings', 'hideSettings') + `<div class="settings"><div class="nav">`;
+  for(const [id,ic,lab] of NAV) h += `<button class="${page===id?'on':''}" onclick="go('${id}')"><span>${ic}</span>${lab}</button>`;
+  h += `<div class="spacer"></div><div class="small muted" style="padding:0 12px">v${S.version}</div></div><div class="content">`;
+
+  /* brightness */
+  h += `<div class="page ${page==='brightness'?'on':''} stagger" id="p_brightness">
+    <div class="sec">Targets</div><div class="card"><div class="row between">
+      <div class="row"><span class="muted">Monitor targets</span><input class="field center" id="targets2" value="${esc(S.targets)}" style="width:80px"></div>
+      <button class="btn ${S.linkAll?'primary':''}" onclick="post('toggleLinkAll')">${S.linkAll?'🔗 All displays linked':'⛓ Link all displays'}</button></div>
+      <div class="note">Numbers, comma separated. ${S.monitors.map(m=>`${m.idx} = ${esc(m.name)}`).join(' · ')}</div></div>
+    <div class="sec">Master brightness</div>` +
+    (anySplit ? `<div class="note">Master sliders hidden while a monitor is Independent. Set every monitor to "Follows master" to show them.</div>` :
+    `<div class="card">${slider('hw2','Hardware backlight',S.hw,'setHW')}${slider('sw2','Software brightness',S.sw,'setSW')}
+      <div style="margin-top:10px">${sw('link2','Move hardware and software sliders together',S.linkHWSW,'setLinkHWSW')}</div></div>`) +
+    `<div class="sec">Dimming curve</div><div class="card"><div class="grid2"><div>
+      <div class="row between"><span class="muted">Type</span><span class="seg"><button class="${S.curve==='linear'?'on':''}" onclick="post('setCurve','linear')">Linear</button><button class="${S.curve==='exponential'?'on':''}" onclick="post('setCurve','exponential')">Exponential</button></span></div>
+      <div style="margin-top:10px">${cb('inv','Invert curve',S.invert,'setInvert')}</div>
+      <div class="sl small"><div class="lab"><span class="n">Curve factor</span><span class="v" id="v_factor">${(S.factor/10).toFixed(1)}</span></div><input type="range" min="10" max="50" value="${S.factor}" id="factor" data-cmd="setFactor" data-suffix="" data-scale="0.1" style="--p:${(S.factor-10)/40*100}%"></div>
+      <div class="sl small"><div class="lab"><span class="n">Max dimming (0–255)</span><span class="v" id="v_maxdark">${S.maxDark}</span></div><input type="range" min="0" max="255" value="${S.maxDark}" id="maxdark" data-cmd="setMaxDark" data-suffix="" style="--p:${S.maxDark/255*100}%"></div>
+      <div class="sl small"><div class="lab"><span class="n">Hotkey step</span><span class="v" id="v_step">${S.step}%</span></div><input type="range" min="1" max="20" value="${S.step}" id="step" data-cmd="setStep" style="--p:${(S.step-1)/19*100}%"></div>
+    </div><div><canvas id="curve" width="420" height="380"></canvas><div class="note">Preview of software brightness mapping.</div></div></div></div>
+    <div class="sec">General</div><div class="card"><div class="row" style="gap:24px;flex-wrap:wrap">${sw('startup','Start with Windows',S.startup,'setStartup')}${sw('usedef','Load my defaults at startup',S.useDefaults,'setUseDefaults')}</div></div></div>`;
+
+  /* monitors & hotkeys */
+  h += `<div class="page ${page==='monitors'?'on':''} stagger" id="p_monitors"><div class="sec">Per-monitor</div>`;
+  for(const m of S.monitors){
+    h += `<div class="card mon ${m.split?'split':''}"><div class="row between"><div class="row"><span class="name">${esc(m.name)}</span><span class="badge">#${m.idx}</span><span class="badge">${m.split?'Independent':'Follows master'}</span></div>
+      <div class="row">${cb('sdim'+m.idx,'Apply dim',m.dim,'setDim|'+m.idx)}<button class="btn sm" onclick="post('toggleSplit',${m.idx})">${m.split?'🔓 Independent':'🔗 Follows master'}</button></div></div>
+      <div class="ind">${slider('smhw'+m.idx,'Hardware',m.hw,'setMonHW|'+m.idx,true)}${slider('smsw'+m.idx,'Software',m.sw,'setMonSW|'+m.idx,true)}</div></div>`;
+  }
+  const pd=S.primary||{};
+  h += `<div class="sec">Primary display</div><div class="card"><div class="row between" style="gap:16px">
+      <div><div><span class="name">${esc(pd.name||'?')}</span> <span class="muted">#${pd.index||'?'} · ${esc(pd.device||'')} · ${pd.count||0} active display${pd.count===1?'':'s'}</span></div>
+      <div class="status" style="margin-top:4px">Power check: ${esc(pd.power||'not running')}${pd.lastEvent?'<br>'+esc(pd.lastEvent):''}</div></div>
+      <button class="btn primary" onclick="post('flipPrimary')">⇄ Swap primary display</button></div>
+    <div style="margin-top:12px">${sw('pguard','Auto-switch the primary display when it stops receiving power',pd.guard,'setPrimaryGuard')}</div>
+    <div class="row" style="margin-top:10px"><span class="muted">Swap hotkey</span>${keyBox(S.hotkeys.master.Flip,'master:Flip')}<span class="muted small">(also in the tray menu and the flyout header)</span></div>
+    <div class="note">The primary monitor is asked for its power state over DDC/CI every 5 seconds. If it reports off, or stops answering after having answered before, for 3 checks in a row while another display is on, the next display becomes primary. Windows switching all displays off to save power is ignored. Laptop panels have no DDC/CI and cannot be checked.</div></div>`;
+  h += `<div class="sec">Hotkeys</div><div class="card"><table class="hk"><tr><th></th>${KINDS.map(k=>`<th>${KIND_LABEL[k]}</th>`).join('')}</tr>
+    <tr><td>Master</td>${KINDS.map(k=>`<td>${keyBox(S.hotkeys.master[k],'master:'+k)}</td>`).join('')}</tr>`;
+  for(const m of S.monitors) h += `<tr><td>${esc(m.name)} <span class="muted small">#${m.idx}</span></td>${KINDS.map(k=>`<td>${keyBox((S.hotkeys.monitors[m.idx]||{})[k],'mon:'+m.idx+':'+k)}</td>`).join('')}</tr>`;
+  h += `</table><div class="note">Click a key box, then press the new combination (mouse buttons work too). Esc clears it. A key can only live in one box. Display rows adjust that display only and switch it to Independent.</div></div></div>`;
+
+  /* schedule */
+  const sc=S.sched;
+  h += `<div class="page ${page==='schedule'?'on':''} stagger" id="p_schedule"><div class="sec">Scheduled brightness</div>
+    <div class="card"><div class="row between">${sw('sched2','Enable the schedule',sc.enabled,'sched|enabled')}<button class="btn sm" onclick="post('sched','applyNow')">Apply now</button></div>
+    <div class="status" style="margin-top:8px">${esc(sc.status1)}<br>${esc(sc.status2)}</div></div>
+    <div class="card"><table class="sch"><tr><th>On</th><th>Time (HH:mm)</th><th>Hardware %</th><th>Software %</th><th></th></tr>`;
+  sc.rows.forEach((r,i)=>{ const n=i+1; h += `<tr><td>${cb('sr'+n,'',r.on,'sched|row|'+n+'|on')}</td>
+    <td><input class="field center" style="width:80px" value="${esc(r.time)}" data-sched="${n}|time" placeholder="07:30"></td>
+    <td><input class="field center" style="width:70px" type="number" min="0" max="100" value="${r.hw}" data-sched="${n}|hw"></td>
+    <td><input class="field center" style="width:70px" type="number" min="0" max="100" value="${r.sw}" data-sched="${n}|sw"></td>
+    <td><button class="btn sm ghost" onclick="post('sched','useCurrent',${n})">Use current</button></td></tr>`; });
+  h += `</table></div><div class="card"><div class="sl small"><div class="lab"><span class="n">Fade into each entry over</span><span class="v" id="v_fade">${sc.fade} min</span></div><input type="range" min="0" max="120" value="${sc.fade}" id="fade" data-cmd="sched|fade" data-suffix=" min" style="--p:${sc.fade/120*100}%"></div>
+    <div style="margin-top:8px">${cb('schind','Also adjust Independent monitors',sc.includeIndependent,'sched|includeIndependent')}</div>
+    <div class="note">Entries wrap past midnight: before the first time, the last entry of the day applies. Moving a slider or using a hotkey pauses the schedule until the next entry.</div></div></div>`;
+
+  /* appearance */
+  h += `<div class="page ${page==='appearance'?'on':''} stagger" id="p_appearance"><div class="sec">Theme</div><div class="theme-grid">`;
+  for(const name of S.themeOrder){ const t=S.themes[name]; h += `<div class="theme ${S.theme===name?'on':''}" onclick="post('setTheme','${esc(name)}')" style="background:#${t.bg};color:#${t.text}"><b style="color:#${t.accent}">${name==='Wallpaper'?'🖼 ':''}${esc(name)}</b>${name==='Wallpaper'?'<div class="small" style="opacity:.7;margin-top:2px">follows each screen\'s wallpaper</div>':''}
+    <div class="sw3"><i style="background:#${t.input}"></i><i style="background:#${t.accent}"></i><i style="background:#${t.sliderFill}"></i><i style="background:#${t.text}"></i></div></div>`; }
+  h += `</div>`;
+  if(S.theme==='Wallpaper') h += `<div class="card" style="margin-top:12px"><div class="sl small"><div class="lab"><span class="n">🖼 Wallpaper theme: colour intensity</span><span class="v" id="v_wpint">${S.wpIntensity}%</span></div><input type="range" min="25" max="100" value="${S.wpIntensity}" id="wpint" data-cmd="setWpIntensity" style="--p:${(S.wpIntensity-25)/75*100}%"></div>
+    <div class="note">Colours are taken from the wallpaper of the screen a window is on and matched by area: each window measures how much of it the cards, background, buttons, lines, slider fills and accents really cover, and the colour covering most of the picture goes to the largest of those, the next to the next, down to the rarest colour on the smallest. Higher intensity pushes the colours further into the surfaces.</div>
+    <div style="margin-top:10px">${sw('wpfrost','Frosted wallpaper behind the glass',S.wpFrost,'setWpFrost')}</div>
+    <div class="note">With glass on: instead of only blurring whatever is behind the window, also draw a frosted copy of the wallpaper area behind it (aligned to the screen), so the window looks like glass on your wallpaper even when other apps are behind it.</div></div>`;
+  h += `<div class="sec">Window background</div><div class="card"><div class="row between">${sw('glass','Transparent glass (blurs whatever is behind the window)',S.glass,'setGlass')}<span class="chip ${S.glass?'on':''}"><i class="dot"></i>${S.glass?'Glass':'Solid'}</span></div>
+    <div class="sl small" style="margin-top:10px"><div class="lab"><span class="n">Tint opacity</span><span class="v" id="v_glassop">${S.glassOpacity}%</span></div><input type="range" min="20" max="95" value="${S.glassOpacity}" id="glassop" data-cmd="setGlassOpacity" style="--p:${(S.glassOpacity-20)/75*100}%" ${S.glass?'':'disabled'}></div>
+    <div class="note">Lower opacity shows more of the desktop through the window. Applies to the flyout and this window. Needs Windows 10 (1803 or newer) or Windows 11.</div></div>`;
+  const tcol=S.themes[S.theme]||S.themes.Custom, wpSel=S.theme==='Wallpaper';
+  h += `<div class="sec">Colours of ${esc(S.theme)}</div><div class="card"><div class="row between" style="gap:10px;flex-wrap:wrap"><span class="muted" style="flex:1;min-width:240px">${wpSel
+      ? 'The Wallpaper palette is generated from your wallpaper. Picking a colour copies the current palette into Custom, applies your colour there and switches to Custom.'
+      : 'Pick any colour; it applies live to this theme and is remembered. Every theme can be tuned this way.'}</span>
+    <div class="row">${wpSel ? '' : `<button class="btn sm" onclick="post('resetTheme')">↺ Reset to original</button>`}${S.theme==='Custom' ? '' : `<button class="btn sm" onclick="post('copyPreset')">Copy to Custom</button>`}</div></div><div class="swatches">`;
+  for(const [slot,label] of S.colorSlots){ const v=tcol[slot]; h += `<div class="swatch"><span>${esc(label)}</span><label style="background:#${v}"><input type="color" value="#${v}" data-slot="${slot}"></label></div>`; }
+  h += `</div></div></div>`;
+
+  /* defaults */
+  h += `<div class="page ${page==='defaults'?'on':''} stagger" id="p_defaults"><div class="sec">Defaults</div><div class="card">
+    <div class="row" style="gap:10px;flex-wrap:wrap"><button class="btn" onclick="post('saveDefaults')">💾 Save current as defaults</button><button class="btn" onclick="post('restoreDefaults')">↩ Restore my defaults</button><button class="btn danger" onclick="post('factoryReset')">🏭 Factory reset</button></div>
+    <div style="margin-top:12px">${sw('usedef2','Load my defaults at startup instead of last-used values',S.useDefaults,'setUseDefaults')}</div>
+    <div class="note">Save stores everything: brightness, targets, monitors, hotkeys, schedule, curve, theme and custom colours. Factory reset keeps your saved defaults.</div></div></div>`;
+  h += `</div></div>`;
+  return h;
+}
+function go(p){ page=p; render(); }
+function drawCurve(){
+  const c=$('#curve'); if(!c) return; const ctx=c.getContext('2d'); const W=c.width,H=c.height; const cs=getComputedStyle(document.documentElement);
+  ctx.fillStyle=cs.getPropertyValue('--graphBg').trim(); ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle=cs.getPropertyValue('--grid').trim(); ctx.setLineDash([3,5]); ctx.lineWidth=1;
+  for(let i=1;i<4;i++){ ctx.beginPath(); ctx.moveTo(0,H*i/4); ctx.lineTo(W,H*i/4); ctx.moveTo(W*i/4,0); ctx.lineTo(W*i/4,H); ctx.stroke(); }
+  ctx.setLineDash([]); ctx.strokeStyle=cs.getPropertyValue('--accent').trim(); ctx.lineWidth=4; ctx.lineJoin='round'; ctx.lineCap='round';
+  const f=S.factor/10, exp=S.curve==='exponential', inv=!!S.invert, pad=4;
+  ctx.beginPath();
+  for(let i=0;i<=60;i++){ const x=i/60; let y=x; if(exp) y = inv ? Math.pow(x,f) : 1-Math.pow(1-x,f); const px=pad+x*(W-2*pad), py=pad+(1-y)*(H-2*pad); i?ctx.lineTo(px,py):ctx.moveTo(px,py); }
+  ctx.stroke();
+  const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,cs.getPropertyValue('--accent').trim()+'55'); g.addColorStop(1,cs.getPropertyValue('--accent').trim()+'00');
+  ctx.lineTo(W-pad,H-pad); ctx.lineTo(pad,H-pad); ctx.closePath(); ctx.fillStyle=g; ctx.fill();
+}
+
+/* ---------- render: build the markup, then patch the live DOM in place ----------
+   Existing elements are kept (no replayed entry animation, hover/focus/scroll survive);
+   only elements that really appear or disappear are inserted or removed. */
+function render(){
+  if(!S) return;
+  applyTheme(S.themes[S.theme]||S.themes['Lava Orange']);
+  const tpl=document.createElement('template');
+  tpl.innerHTML = VIEW==='flyout' ? renderFlyout() : renderSettings();
+  morphChildren(app, tpl.content);
+  if(VIEW!=='flyout') drawCurve();
+  measureAreas();
+}
+/* ---------- Wallpaper theme: measure how much of this window each colour group really covers, so the engine
+   can give the most common wallpaper colour to the largest group, and so on ---------- */
+let lastAreaOrder='';
+function measureAreas(){
+  const W=innerWidth, H=innerHeight, total=W*H; if(W<200 || H<200) return;   /* not while the window is still hidden / tiny */
+  /* once per window size: re-measuring on every state change or page switch would recolour the window while you use it */
+  const key=W+'x'+H; if(key===measureAreas._k) return; measureAreas._k=key;
+  const area=el=>{ const r=el.getBoundingClientRect(); const w=Math.max(0,Math.min(r.right,W)-Math.max(r.left,0)), h=Math.max(0,Math.min(r.bottom,H)-Math.max(r.top,0)); return w*h; };
+  const sum=(sel,f=1)=>[...document.querySelectorAll(sel)].reduce((a,el)=>a+area(el)*f,0);
+  let panel = sum('.card') + sum('.nav',0.55) + sum('.hdr',0.5) + sum('.toast.on');
+  let btn = sum('.btn:not(.primary)') + sum('.seg') + sum('kbd') + sum('.field') + sum('.chip') + sum('.theme') + sum('.sw input:not(:checked)+.k') + sum('.cb input:not(:checked)+.b');
+  let accent = sum('.btn.primary') + sum('.nav button.on') + sum('.v') + sum('.sec',0.35) + sum('.logo') + sum('.seg button.on') + sum('.icon-btn.big',0.4) + sum('.theme.on',0.15);
+  let fill = sum('.sw input:checked+.k') + sum('.cb input:checked+.b'), thumb=0;
+  document.querySelectorAll('input[type=range]').forEach(el=>{ const r=el.getBoundingClientRect(); if(!r.width) return; const p=(+el.value-(+el.min||0))/((+el.max||100)-(+el.min||0)); btn+=r.width*6*(1-p); fill+=r.width*6*p; thumb+=400; });
+  accent += thumb;
+  let line = [...document.querySelectorAll('.card')].reduce((a,el)=>{ const r=el.getBoundingClientRect(); return a + (r.width?2*(r.width+r.height):0); },0)
+           + [...document.querySelectorAll('.sec')].reduce((a,el)=>a+el.getBoundingClientRect().width*0.65,0) + W*2 + sum('canvas#curve',0.06) + sum('table.hk',0.02);
+  const bg = Math.max(0, total - panel - btn - accent - fill - line);
+  const parts=[['panel',panel],['bg',bg],['btn',btn],['line',line],['fill',fill],['accent',accent]].sort((a,b)=>b[1]-a[1]);
+  const order=parts.map(x=>x[0]).join('>');
+  if(order!==lastAreaOrder){ lastAreaOrder=order; post('uiAreas', order, parts.map(x=>x[0]+' '+Math.round(x[1]/total*100)+'%').join(', ')); }
+}
+addEventListener('resize', ()=>{ clearTimeout(measureAreas._t); measureAreas._t=setTimeout(measureAreas,150); });
+function sameNode(a,b){
+  if(a.nodeType!==b.nodeType) return false;
+  if(a.nodeType!==1) return true;
+  const kind=el=>(el.className||'').split(' ')[0];
+  return a.tagName===b.tagName && (a.id||'')===(b.id||'') && kind(a)===kind(b) && (a.getAttribute('type')||'')===(b.getAttribute('type')||'');
+}
+function morphChildren(oldP,newP){
+  const oldKids=[...oldP.childNodes], newKids=[...newP.childNodes];
+  for(let i=0;i<newKids.length;i++){
+    const o=oldKids[i], n=newKids[i];
+    if(!o) oldP.appendChild(n);
+    else if(sameNode(o,n)) morphNode(o,n);
+    else oldP.replaceChild(n,o);
+  }
+  for(let i=newKids.length;i<oldKids.length;i++) oldKids[i].remove();
+}
+function morphNode(o,n){
+  if(o.nodeType===3){ if(o.nodeValue!==n.nodeValue) o.nodeValue=n.nodeValue; return; }
+  if(o.nodeType!==1) return;
+  for(const a of [...o.attributes]) if(!n.hasAttribute(a.name)) o.removeAttribute(a.name);
+  for(const a of [...n.attributes]) if(o.getAttribute(a.name)!==a.value) o.setAttribute(a.name,a.value);
+  if(o.tagName==='INPUT' && o!==document.activeElement){
+    if(o.type==='checkbox'){ if(o.checked!==n.checked) o.checked=n.checked; }
+    else if(o.value!==n.value) o.value=n.value;
+  }
+  if(o.tagName==='CANVAS') return;
+  morphChildren(o,n);
+}
+/* ---------- edge resize: the web view covers the whole window, so the page detects presses near
+   the edges and asks the engine to start the native sizing loop (hit-test codes HTLEFT..HTBOTTOMRIGHT) ---------- */
+const EDGE=6, EDGE_CUR={10:'ew-resize',11:'ew-resize',12:'ns-resize',15:'ns-resize',13:'nwse-resize',17:'nwse-resize',14:'nesw-resize',16:'nesw-resize'};
+function edgeAt(x,y){
+  const l=x<EDGE, r=x>=innerWidth-EDGE, t=y<EDGE, b=y>=innerHeight-EDGE;
+  if(t&&l) return 13; if(t&&r) return 14; if(b&&l) return 16; if(b&&r) return 17;
+  return l?10:r?11:t?12:b?15:0;
+}
+function onScrollbar(e){ const el=e.target; return el && el.nodeType===1 && el.clientWidth && (e.clientX > el.getBoundingClientRect().left + el.clientWidth); }
+document.addEventListener('pointermove', e=>{ const d=edgeAt(e.clientX,e.clientY); document.documentElement.style.cursor = d ? EDGE_CUR[d] : ''; });
+document.addEventListener('pointerdown', e=>{
+  if(e.button!==0) return;
+  const d=edgeAt(e.clientX,e.clientY);
+  /* a vertical scrollbar sits flush with the right edge: its outer 3px still act as the resize grip */
+  if(d && (!onScrollbar(e) || e.clientX >= innerWidth-3)){ e.preventDefault(); e.stopPropagation(); post('resize', d); }
+}, true);
+/* A state push must never rebuild the DOM while a slider is being dragged or a text field is being edited. */
+let dragging=false, pendingState=null;
+document.addEventListener('pointerdown', e=>{ if(e.target && e.target.type==='range') dragging=true; }, true);
+document.addEventListener('pointerup', ()=>{ if(dragging){ dragging=false; if(pendingState){ S=pendingState; pendingState=null; capturing=S.capturing||''; render(); } } }, true);
+window.chrome?.webview?.addEventListener('message', e=>{
+  const d=e.data; if(!d||typeof d!=='object') return;
+  if(d.type==='state'){
+    const active=document.activeElement; const editing = active && active.tagName==='INPUT' && active.type!=='range' && active.type!=='checkbox' && active.type!=='color';
+    if(dragging || editing){ pendingState=d; S=d; syncLight(); return; }
+    S=d; capturing=d.capturing||''; render();
+  }
+  if(d.type==='toast') toast(d.text);
+  if(d.type==='nav'){ page=d.page; render(); }
+  if(d.type==='wpgeom'){ if(S&&S.wp){ S.wp.x=d.x; S.wp.y=d.y; } positionWallpaper(d.x,d.y); }
+});
+/* light sync while a text field has focus: update slider values/readouts without rebuilding */
+function syncLight(){
+  applyTheme(S.themes[S.theme]);
+  const set=(id,v,suf='%')=>{ const el=document.getElementById(id); if(el&&document.activeElement!==el){ el.value=v; el.dispatchEvent(new Event('sync')); const o=$('#v_'+id); if(o) o.textContent=v+suf; el.style.setProperty('--p',((v-(+el.min||0))/((+el.max||100)-(+el.min||0))*100)+'%'); } };
+  set('hw',S.hw); set('sw',S.sw); set('hw2',S.hw); set('sw2',S.sw);
+}
+post('ready');
+</script>
+</body>
+</html>
