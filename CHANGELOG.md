@@ -68,10 +68,11 @@ All notable changes to Smart Dimmer are documented here. The format follows
 ### Changed
 - **Navigation reorganised.** The flyout is for everyday adjusting and Settings for things you set
   once; nothing appears in both.
-  - Flyout: Brightness (shared sliders with a one-line explanation), Screens (an *Own sliders* switch
-    per screen), Schedule (on/off, what is in effect, *Edit ›* opens the Schedule page).
-  - Settings pages: Brightness, Screens, Hotkeys, Schedule, Appearance, General, each opening with a
-    line saying what it is for.
+  - Flyout: Brightness (shared sliders with a one-line explanation), Warmth (the warmth slider, its
+    per-screen ticks and the warmth schedule switch), Screens (an *Own sliders* switch per screen),
+    Schedule (on/off, what is in effect, *Edit ›* opens the Schedule page).
+  - Settings pages: Brightness, Warmth, Screens, Hotkeys, Schedule, Appearance, General, each opening
+    with a line saying what it is for.
   - The *Targets* number field and *Link all* button are replaced by per-screen *Backlight* and
     *Software* ticks in the flyout: under each shared slider ("Applies to"), on each screen's own
     sliders, and on a screen's card while the shared sliders are hidden. Untick to leave that
