@@ -74,6 +74,19 @@ The compiled executable contains the AutoHotkey v2 interpreter (`AutoHotkey64.ex
 licensed under the GNU General Public License v2.0: <https://www.autohotkey.com/docs/v2/license.htm>.
 AutoHotkey is not modified; the script and the page remain under the MIT License above.
 
+## Theme palettes
+
+The *Tokyo Night* and *Nord Frost* themes are inspired by the colour palettes of the
+[Tokyo Night](https://github.com/enkia/tokyo-night-vscode-theme) (MIT) and [Nord](https://www.nordtheme.com/)
+(MIT) projects. Smart Dimmer is not affiliated with either project.
+
+## Weather and place search
+
+The automatic theme and the Sky theme use the free [Open-Meteo](https://open-meteo.com/) weather
+forecast and geocoding APIs. Weather data by Open-Meteo.com, licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Place names come from GeoNames via Open-Meteo.
+Nothing from these services is bundled; they are called only while those features are in use.
+
 ## Microsoft Edge WebView2 Runtime
 
 Not bundled. The application uses the Evergreen WebView2 Runtime installed on the machine

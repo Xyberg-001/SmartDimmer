@@ -19,7 +19,8 @@
   --op:65%;
   /* derived surfaces: solid by default, translucent in glass mode */
   --surface:var(--bg); --panelS:var(--panel);
-  --accent2:color-mix(in srgb,var(--accent) 72%,#fff 28%);
+  --accentHi:color-mix(in srgb,var(--accent) 72%,#fff 28%);   /* calm look: lighter accent for gradients */
+  --accent2:#FF4D6D;                                           /* the theme's second accent (set from the theme) */
   --hl:inset 0 1px 0 rgba(255,255,255,.055);
 }
 *{box-sizing:border-box}
@@ -44,9 +45,11 @@ a{color:var(--accent)}
 /* ---------- header (drag handle) ---------- */
 .hdr{display:flex;align-items:center;gap:12px;padding:12px 16px 10px;background:linear-gradient(180deg,var(--panelS),transparent);border-bottom:1px solid color-mix(in srgb,var(--line) 80%,transparent);cursor:default;app-region:drag;-webkit-app-region:drag}
 .hdr button{app-region:no-drag;-webkit-app-region:no-drag}
-.hdr .logo{width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,var(--accent2),color-mix(in srgb,var(--accent) 55%,#000));box-shadow:0 0 22px color-mix(in srgb,var(--accent) 45%,transparent),var(--hl);
-  display:grid;place-items:center;font-size:18px;animation:glow 4s ease-in-out infinite}
-@keyframes glow{0%,100%{box-shadow:0 0 14px color-mix(in srgb,var(--accent) 35%,transparent)}50%{box-shadow:0 0 30px color-mix(in srgb,var(--accent) 65%,transparent)}}
+.hdr .logo{width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,var(--accentHi),color-mix(in srgb,var(--accent) 55%,#000));box-shadow:0 0 22px color-mix(in srgb,var(--accent) 45%,transparent),var(--hl);
+  display:grid;place-items:center;font-size:18px;position:relative}
+.hdr .logo::after{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;box-shadow:0 0 30px color-mix(in srgb,var(--accent) 65%,transparent);
+  opacity:0;animation:glow 4s steps(12,jump-none) infinite;will-change:opacity}
+@keyframes glow{0%,100%{opacity:0}50%{opacity:1}}
 .hdr .t{flex:1;min-width:0}
 .hdr .t b{display:block;font-size:17px;color:var(--accent);letter-spacing:.2px}
 .hdr .t span{font-size:11.5px;color:var(--muted)}
@@ -78,7 +81,7 @@ a{color:var(--accent)}
 .btn{background:var(--btn);color:var(--btnText);border:1px solid var(--line);border-radius:11px;padding:8px 14px;font-weight:600;box-shadow:var(--hl);transition:transform .1s,filter .15s,border-color .15s,background .35s,box-shadow .2s;white-space:nowrap}
 .btn:hover{filter:brightness(1.15);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
 .btn:active{transform:scale(.97)}
-.btn.primary{background:linear-gradient(135deg,var(--accent2),var(--accent));color:#141416;border-color:transparent;box-shadow:0 4px 14px color-mix(in srgb,var(--accent) 35%,transparent)}
+.btn.primary{background:linear-gradient(135deg,var(--accentHi),var(--accent));color:#141416;border-color:transparent;box-shadow:0 4px 14px color-mix(in srgb,var(--accent) 35%,transparent)}
 .btn.primary:hover{box-shadow:0 6px 20px color-mix(in srgb,var(--accent) 50%,transparent)}
 .btn.ghost{background:transparent;box-shadow:none}
 .btn.sm{padding:5px 10px;font-size:12.5px;border-radius:9px}
@@ -102,6 +105,15 @@ a{color:var(--accent)}
 .cb .b::after{content:"";width:6px;height:11px;border:solid #141416;border-width:0 2.5px 2.5px 0;transform:rotate(45deg) scale(0);transition:transform .2s cubic-bezier(.34,1.56,.64,1);margin-top:-3px}
 .cb input:checked+.b{background:var(--check);border-color:var(--check)}
 .cb input:checked+.b::after{transform:rotate(45deg) scale(1)}
+/* compact tick (per-screen Backlight / Software ticks in the flyout) */
+.cb.sm{gap:6px;font-size:12.5px;color:var(--muted)}
+.cb.sm .b{width:16px;height:16px;border-radius:5px}
+.cb.sm .b::after{width:4px;height:8px;border-width:0 2px 2px 0;margin-top:-2px}
+.cb.sm input:checked~span:last-child{color:var(--text)}
+.ticks{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin:2px 0 8px}
+.ticks .lbl{font-size:11.5px;color:var(--muted);opacity:.8}
+.sl .lab .n .cb.sm{font-size:inherit;color:inherit}
+.sl.off .lab .v{color:var(--muted);opacity:.6}
 /* slider */
 .sl{display:block;margin-top:6px}
 .sl .lab{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
@@ -115,22 +127,50 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;heigh
 input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.15);box-shadow:0 0 0 6px color-mix(in srgb,var(--thumb) 25%,transparent)}
 input[type=range]:active::-webkit-slider-thumb{transform:scale(1.25)}
 input[type=range]:disabled{opacity:.4}
+/* warmth: the track shows the colour temperature range, neutral white to candle orange */
+html .sl.warm input[type=range]::-webkit-slider-runnable-track{background:linear-gradient(90deg,#f4f7ff 0,#ffd9ad 40%,#ffab5e 75%,#ff7b24 100%);opacity:.9}
+/* automatic theme */
+.slotgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.slotgrid.five{grid-template-columns:repeat(5,minmax(0,1fr))}
+@media (max-width:820px){.slotgrid,.slotgrid.five{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}}
+.slot{display:flex;flex-direction:column;gap:6px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.slot.now{border-color:color-mix(in srgb,var(--accent) 65%,transparent)}
+.slot>span{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:6px}
+.slot .badge{margin-left:auto}
+select.field{width:100%;cursor:pointer}
+.slot select.field{padding:6px 2px 6px 7px;font-size:12.5px;text-overflow:ellipsis}
+select.field option{background:var(--bg);color:var(--text)}
+.places{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.place{text-align:left;border:1px solid var(--line);background:var(--surface);color:var(--text);border-radius:10px;padding:8px 12px;cursor:pointer;font:inherit}
+.place:hover{border-color:var(--accent)}
+/* warmth schedule page */
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+@media (max-width:760px){.grid3{grid-template-columns:1fr}}
+.phase .ph-h{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px}
+.phase .ph-h .ic{font-size:18px;line-height:1}
+.phase .ph-h .badge{margin-left:auto}
+.phase .ph-t{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:12px 0 4px}
+.phase.now{border-color:color-mix(in srgb,var(--accent) 65%,transparent)}
+#warmchart{display:block;width:100%;height:190px;margin-top:12px;border-radius:12px;background:var(--graphBg)}
+.timef{width:84px;text-align:center;font-variant-numeric:tabular-nums}
+.warnline{display:flex;gap:8px;align-items:flex-start;font-size:11.5px;margin-top:10px;padding:8px 10px;border-radius:10px;
+  background:color-mix(in srgb,#ffb347 14%,transparent);border:1px solid color-mix(in srgb,#ffb347 35%,transparent);color:var(--text)}
 /* segmented */
 .seg{display:inline-flex;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
 .seg button{border:0;background:transparent;color:var(--muted);padding:5px 12px;border-radius:8px;font-weight:600;transition:all .2s}
-.seg button.on{background:linear-gradient(135deg,var(--accent2),var(--accent));color:#141416}
+.seg button.on{background:linear-gradient(135deg,var(--accentHi),var(--accent));color:#141416}
 /* chips */
 .chip{display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12px;color:var(--muted)}
 .chip.on{border-color:var(--accent);color:var(--accent)}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
-.chip.on .dot{background:var(--accent);box-shadow:0 0 8px var(--accent);animation:pulse 1.6s infinite}
+.chip.on .dot{background:var(--accent);box-shadow:0 0 8px var(--accent);animation:pulse 1.6s steps(6,jump-none) infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 /* monitor card */
 .mon{position:relative;overflow:hidden}
 .mon .ind{margin-top:10px;border-left:3px solid var(--accent);padding-left:12px;max-height:0;opacity:0;transition:max-height .45s cubic-bezier(.2,.7,.2,1),opacity .35s,margin .35s;margin-top:0}
 .mon.split .ind{max-height:220px;opacity:1;margin-top:10px}
 .mon .name{font-weight:700;font-size:15px}
-.mon .badge{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--surface);border:1px solid var(--line);color:var(--muted)}
+.badge{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--surface);border:1px solid var(--line);color:var(--muted)}
 .mon.split .badge{color:var(--accent);border-color:var(--accent)}
 .note{font-size:11.5px;color:var(--muted);margin-top:8px}
 kbd{background:var(--surface);border:1px solid var(--line);border-bottom-width:2px;border-radius:7px;padding:3px 9px;font-weight:600;font-size:12.5px;min-width:64px;display:inline-block;text-align:center;cursor:pointer;transition:all .15s}
@@ -142,10 +182,13 @@ kbd.empty{color:var(--muted)}
 .nav{width:200px;flex:none;border-right:1px solid color-mix(in srgb,var(--line) 80%,transparent);padding:12px 10px;display:flex;flex-direction:column;gap:4px;background:color-mix(in srgb,var(--panelS) 55%,transparent)}
 .nav button{text-align:left;border:0;background:transparent;color:var(--muted);padding:9px 12px;border-radius:10px;font-weight:600;display:flex;gap:10px;align-items:center;transition:all .2s}
 .nav button:hover{background:var(--panelS);color:var(--text)}
-.nav button.on{background:linear-gradient(135deg,var(--accent2),var(--accent));color:#141416;box-shadow:0 4px 14px color-mix(in srgb,var(--accent) 30%,transparent)}
+.nav button.on{background:linear-gradient(135deg,var(--accentHi),var(--accent));color:#141416;box-shadow:0 4px 14px color-mix(in srgb,var(--accent) 30%,transparent)}
 .nav .spacer{flex:1}
 .content{flex:1;overflow:auto;padding:6px 22px 24px}
 .page{display:none}.page.on{display:block}
+.intro{margin:16px 0 6px}
+.intro h2{margin:0;font-size:20px;font-weight:700;color:var(--text)}
+.intro p{margin:4px 0 0;color:var(--muted);font-size:12.5px;max-width:640px;line-height:1.5}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .theme-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:10px}
 .theme{border:2px solid var(--line);border-radius:12px;padding:10px;cursor:pointer;transition:all .2s;background:var(--surface)}
@@ -171,10 +214,70 @@ table.sch td{padding:0 4px}
 .hidden{display:none!important}
 /* thin strip over the header so presses on the very top edge reach the page (resize) instead of the native drag region */
 #gripTop{position:fixed;top:0;left:0;right:0;height:6px;z-index:50;app-region:no-drag;-webkit-app-region:no-drag}
+
+/* ---------- lively effects (Appearance > Lively effects): the theme's two accents as ambient glow and gradients ---------- */
+#amb{position:fixed;inset:-15%;z-index:0;pointer-events:none;display:none;
+  background:
+    radial-gradient(40% 32% at 14% 8%, color-mix(in srgb,var(--accent) 34%,transparent), transparent 70%),
+    radial-gradient(46% 38% at 88% 78%, color-mix(in srgb,var(--accent2) 32%,transparent), transparent 70%),
+    radial-gradient(30% 26% at 70% 40%, color-mix(in srgb,var(--accent2) 14%,transparent), transparent 70%);
+  animation:ambDrift 28s steps(84,jump-none) infinite alternate;will-change:transform}
+@keyframes ambDrift{0%{transform:translate(0,0) scale(1)}50%{transform:translate(3%,-2%) scale(1.06)}100%{transform:translate(-3%,3%) scale(1.02)}}
+html.lively #amb{display:block}
+html.lively{--grad:linear-gradient(135deg,var(--accent),var(--accent2))}
+html.lively .hdr .logo{background:var(--grad);box-shadow:0 0 22px color-mix(in srgb,var(--accent2) 40%,transparent),var(--hl)}
+html.lively .hdr .t b{background:var(--grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+html.lively .hdr{border-bottom-color:transparent;background-image:linear-gradient(180deg,var(--panelS),transparent),linear-gradient(90deg,color-mix(in srgb,var(--accent) 55%,transparent),color-mix(in srgb,var(--accent2) 55%,transparent));background-size:100% 100%,100% 1px;background-position:0 0,0 100%;background-repeat:no-repeat}
+html.lively .btn.primary,html.lively .nav button.on,html.lively .seg button.on{background:var(--grad)}
+html.lively .btn.primary{box-shadow:0 4px 16px color-mix(in srgb,var(--accent2) 35%,transparent)}
+html.lively .sw input:checked+.k{background:linear-gradient(135deg,var(--check),var(--accent2));border-color:transparent;box-shadow:0 0 12px color-mix(in srgb,var(--accent2) 40%,transparent)}
+html.lively .cb input:checked+.b{background:linear-gradient(135deg,var(--check),var(--accent2));border-color:transparent}
+html.lively input[type=range]::-webkit-slider-runnable-track{background:linear-gradient(90deg,var(--fill) 0,color-mix(in srgb,var(--fill) 30%,var(--accent2)) var(--p,50%),var(--track) var(--p,50%) 100%)}
+html.lively .sl .lab .v{background:var(--grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+html.lively .sl.off .lab .v{-webkit-text-fill-color:var(--muted)}
+html.lively .sec::after{background:linear-gradient(90deg,color-mix(in srgb,var(--accent) 45%,var(--line)),color-mix(in srgb,var(--accent2) 30%,transparent) 60%,transparent)}
+html.lively .card{border-color:color-mix(in srgb,var(--line) 75%,var(--accent2) 25%);background:linear-gradient(160deg,color-mix(in srgb,var(--panelS) 80%,transparent),color-mix(in srgb,var(--panelS) 70%,transparent));backdrop-filter:blur(14px) saturate(1.3)}
+html.lively .card:hover{box-shadow:var(--hl),0 12px 30px color-mix(in srgb,var(--accent2) 16%,transparent);border-color:color-mix(in srgb,var(--accent) 45%,var(--accent2))}
+html.lively .mon.split .ind{border-image:linear-gradient(180deg,var(--accent),var(--accent2)) 1}
+@media (prefers-reduced-motion: reduce){#amb{animation:none}}
+html.idle #amb,html.idle .hdr .logo::after,html.idle .chip.on .dot{animation-play-state:paused}
+/* Northern Lights: a vivid aurora over a polar night. Glows in the theme's green and violet, curtains (green, teal,
+   violet with a pink fringe) swaying across the upper sky with faint vertical rays, stars behind. Shown even with lively
+   effects off (then still); the curtains are one blurred layer that only moves, 3 steps a second, so they stay cheap. */
+html.aurora #amb{display:block;
+  background:
+    radial-gradient(55% 40% at 18% 6%, color-mix(in srgb,var(--accent) 52%,transparent), transparent 70%),
+    radial-gradient(50% 42% at 86% 12%, color-mix(in srgb,var(--accent2) 50%,transparent), transparent 70%),
+    radial-gradient(40% 30% at 52% 30%, color-mix(in srgb,#19E3D0 30%,transparent), transparent 72%),
+    radial-gradient(70% 45% at 50% 108%, color-mix(in srgb,#0B4B6B 60%,transparent), transparent 70%)}
+html.aurora #amb::before{content:'';position:absolute;inset:-4% -12% 8% -12%;pointer-events:none;
+  background:
+    repeating-linear-gradient(92deg,transparent 0 18px,rgba(255,255,255,.07) 18px 21px),
+    linear-gradient(100deg,transparent 10%,color-mix(in srgb,var(--accent) 80%,transparent) 22%,transparent 33%),
+    linear-gradient(78deg,transparent 32%,color-mix(in srgb,#19E3D0 62%,transparent) 43%,transparent 54%),
+    linear-gradient(104deg,transparent 50%,color-mix(in srgb,var(--accent2) 72%,transparent) 61%,color-mix(in srgb,#FF4FD8 40%,transparent) 67%,transparent 76%),
+    linear-gradient(86deg,transparent 70%,color-mix(in srgb,var(--accent) 48%,transparent) 80%,transparent 90%);
+  filter:blur(13px) saturate(1.45);transform-origin:50% 0;
+  -webkit-mask-image:linear-gradient(to bottom,#000 0%,#000 42%,transparent 96%);mask-image:linear-gradient(to bottom,#000 0%,#000 42%,transparent 96%);
+  animation:auroraSway 24s steps(72,jump-none) infinite alternate;will-change:transform}
+@keyframes auroraSway{0%{transform:skewX(-7deg) translateX(-5%) scaleY(1)}50%{transform:skewX(5deg) translateX(4%) scaleY(1.12)}100%{transform:skewX(-2deg) translateX(-1%) scaleY(.94)}}
+html.aurora #amb::after{content:'';position:absolute;inset:0;pointer-events:none;opacity:.7;
+  background-image:radial-gradient(1px 1px at 12% 18%,#fff,transparent),radial-gradient(1px 1px at 27% 42%,#dff,transparent),
+    radial-gradient(1.5px 1.5px at 43% 12%,#fff,transparent),radial-gradient(1px 1px at 58% 33%,#eef,transparent),
+    radial-gradient(1px 1px at 71% 9%,#fff,transparent),radial-gradient(1.5px 1.5px at 84% 27%,#dff,transparent),
+    radial-gradient(1px 1px at 92% 51%,#fff,transparent),radial-gradient(1px 1px at 6% 61%,#eef,transparent),
+    radial-gradient(1px 1px at 36% 70%,#fff,transparent),radial-gradient(1px 1px at 66% 64%,#dff,transparent)}
+/* cards let more of the sky through */
+html.aurora.lively .card{background:linear-gradient(160deg,color-mix(in srgb,var(--panelS) 66%,transparent),color-mix(in srgb,var(--panelS) 54%,transparent));
+  border-color:color-mix(in srgb,var(--accent) 22%,color-mix(in srgb,var(--line) 70%,var(--accent2) 30%))}
+html.aurora:not(.lively) #amb,html.aurora:not(.lively) #amb::before{animation:none}
+html.idle.aurora #amb::before{animation-play-state:paused}
+@media (prefers-reduced-motion: reduce){html.aurora #amb::before{animation:none}}
 </style>
 </head>
 <body>
 <div id="wp"></div>
+<div id="amb"></div>
 <div id="gripTop"></div>
 <div id="app"></div>
 <div id="toast" class="toast"></div>
@@ -188,16 +291,19 @@ let page = 'brightness';            // settings nav
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const KINDS = ['HWUp','HWDown','SWUp','SWDown'];
-const KIND_LABEL = {HWUp:'Hardware ▲',HWDown:'Hardware ▼',SWUp:'Software ▲',SWDown:'Software ▼'};
+const KIND_LABEL = {HWUp:'Backlight ▲',HWDown:'Backlight ▼',SWUp:'Software ▲',SWDown:'Software ▼'};
 let toastT;
 function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('on'),1800); }
 
 /* ---------- theme ---------- */
 function applyTheme(t){
   const r=document.documentElement.style;
-  const map={bg:'bg',input:'panel',line:'line',text:'text',muted:'muted',accent:'accent',btnFace:'btn',btnText:'btnText',checkOn:'check',sliderTrack:'track',sliderFill:'fill',sliderThumb:'thumb',graphBg:'graphBg',grid:'grid'};
+  const map={bg:'bg',input:'panel',line:'line',text:'text',muted:'muted',accent:'accent',accent2:'accent2',btnFace:'btn',btnText:'btnText',checkOn:'check',sliderTrack:'track',sliderFill:'fill',sliderThumb:'thumb',graphBg:'graphBg',grid:'grid'};
   for(const k in map) if(t[k]) r.setProperty('--'+map[k],'#'+t[k]);
+  if(!t.accent2 && t.accent) r.setProperty('--accent2','#'+t.accent);
   document.documentElement.classList.toggle('glass', !!(S&&S.glass));
+  document.documentElement.classList.toggle('lively', !!(S&&S.lively));
+  document.documentElement.classList.toggle('aurora', !!(S&&S.theme==='Northern Lights'));
   if(S) r.setProperty('--op', (S.glassOpacity||65)+'%');
   r.setProperty('--wr', (window.SD_RADIUS||14)+'px');
   applyWallpaperLayer();
@@ -228,20 +334,64 @@ function positionWallpaper(x, y){
 }
 
 /* ---------- widgets ---------- */
-function slider(id,label,val,cmd,small){
-  return `<div class="sl ${small?'small':''}"><div class="lab"><span class="n">${label}</span><span class="v" id="v_${id}">${val}%</span></div>
-  <input type="range" min="0" max="100" value="${val}" id="${id}" data-cmd="${cmd}" style="--p:${val}%"></div>`;
+/* tick: optional tick box shown in front of the label; off: the adjustment is switched off (slider greyed, disabled) */
+function slider(id,label,val,cmd,small,tick,off){
+  return `<div class="sl ${small?'small':''} ${off?'off':''}"><div class="lab"><span class="n">${tick||''}${tick?'':label}</span><span class="v" id="v_${id}">${val}%</span></div>
+  <input type="range" min="0" max="100" value="${val}" id="${id}" data-cmd="${cmd}" style="--p:${val}%" ${off?'disabled':''}></div>`;
 }
+/* the per-screen ticks: Backlight (setBacklight), Software (setDim) and Warmth (setWarm) */
+const tickBL=(pfx,m,label='Backlight')=>cb(pfx+'bl'+m.idx,label,m.backlight,'setBacklight|'+m.idx,'sm');
+const tickSW=(pfx,m,label='Software')=>cb(pfx+'sw'+m.idx,label,m.dim,'setDim|'+m.idx,'sm');
+const tickWM=(pfx,m,label='Warmth')=>cb(pfx+'wm'+m.idx,label,m.warm,'setWarm|'+m.idx,'sm');
 /* live readout + fill while the user drags (the state push later confirms the same value) */
 function sliderMoved(el){
   const v=+el.value, min=+el.min||0, max=+el.max||100;
   el.style.setProperty('--p',((v-min)/(max-min)*100)+'%');
   const o=$('#v_'+el.id);
-  if(o){ o.textContent=(el.dataset.scale ? (v*+el.dataset.scale).toFixed(1) : v)+(el.dataset.suffix??'%'); o.classList.add('bump'); setTimeout(()=>o.classList.remove('bump'),150); }
+  if(o){ o.textContent=el.dataset.fmt==='warm' ? warmLabel(v, el.dataset.zero||'Off') : (el.dataset.scale ? (v*+el.dataset.scale).toFixed(1) : v)+(el.dataset.suffix??'%'); o.classList.add('bump'); setTimeout(()=>o.classList.remove('bump'),150); }
+}
+/* warmth 0..100 maps to 6500 K (neutral) .. 1900 K, the same formula as the engine's WarmthToKelvin */
+const warmK=v=>Math.round(6500-(Math.max(0,Math.min(100,v))/100)*4600);
+const warmLabel=(v,zero='Off')=>+v? `${warmK(v)} K` : zero;
+function warmSlider(val,id='warm',cmd='setWarmth',label='Warmth',zero='Off',small=false){
+  return `<div class="sl warm ${small?'small':''}"><div class="lab"><span class="n">${label}</span><span class="v" id="v_${id}">${warmLabel(val,zero)}</span></div>
+  <input type="range" min="0" max="100" value="${val}" id="${id}" data-cmd="${cmd}" data-fmt="warm" data-zero="${zero}" style="--p:${val}%"></div>`;
+}
+/* colour of the light at a warmth level (same blackbody approximation as the engine), for the timeline */
+function kelvinRGB(K){ const t=K/100;
+  const r=t<=66?255:329.698727446*Math.pow(t-60,-0.1332047592);
+  const g=t<=66?99.4708025861*Math.log(t)-161.1195681661:288.1221695283*Math.pow(t-60,-0.0755148492);
+  const b=t>=66?255:(t<=19?0:138.5177312231*Math.log(t-10)-305.0447927307);
+  return [r,g,b].map(v=>Math.max(0,Math.min(255,v))); }
+function warmRGB(level){ const ref=kelvinRGB(6500), c=kelvinRGB(warmK(level)); return c.map((v,i)=>Math.round(255*Math.min(1,v/ref[i]))); }
+/* display colour for a warmth level on the timeline: the same scale as the warmth slider's track */
+const WARM_STOPS=[[0,[244,247,255]],[40,[255,217,173]],[75,[255,171,94]],[100,[255,123,36]]];
+function warmDisplayRGB(v){ v=Math.max(0,Math.min(100,v));
+  for(let i=1;i<WARM_STOPS.length;i++){ const [a,ca]=WARM_STOPS[i-1],[b,cb]=WARM_STOPS[i];
+    if(v<=b){ const t=(v-a)/(b-a); return ca.map((c,k)=>Math.round(c+(cb[k]-c)*t)); } }
+  return WARM_STOPS[WARM_STOPS.length-1][1]; }
+const PHASE_ICON={Daytime:'☀️',Evening:'🌇',Bedtime:'🌙'};
+/* explains the chosen transition with the user's own times, e.g. "Bedtime at 23:00 is fully warm at 00:00" */
+function transitionNote(ws){
+  const at=n=>(ws.phases.find(p=>p.name===n)||{}).time||'';
+  const plus=(t,m)=>{ const x=/^(\d{1,2}):(\d{2})$/.exec(t); if(!x) return t; const v=((+x[1])*60+(+x[2])+m)%1440; return String(Math.floor(v/60)).padStart(2,'0')+':'+String(v%60).padStart(2,'0'); };
+  const bed=at('Bedtime'), day=at('Daytime');
+  if(!ws.fade) return `Each part of the day switches at its time: Bedtime at ${bed} is fully warm at once, and Daytime at ${day} is neutral at once.`;
+  return `Each part of the day begins at its time and takes this long to reach its warmth: Bedtime at ${bed} is fully warm at ${plus(bed,ws.fade)}, and Daytime at ${day} is back to neutral by ${plus(day,ws.fade)}.`;
 }
 function sw(id,label,on,cmd){ return `<label class="sw"><input type="checkbox" id="${id}" ${on?'checked':''} data-cmd="${cmd}"><span class="k"></span><span>${label}</span></label>`; }
-function cb(id,label,on,cmd){ return `<label class="cb"><input type="checkbox" id="${id}" ${on?'checked':''} data-cmd="${cmd}"><span class="b"></span><span>${label}</span></label>`; }
-function keyBox(val,id){ const cap=capturing===id; return `<kbd class="${cap?'cap':(val?'':'empty')}" data-cap="${id}" title="Click, then press keys. Esc clears.">${cap?'Press…':(esc(val)||'–')}</kbd>`; }
+function cb(id,label,on,cmd,cls=''){ return `<label class="cb ${cls}"><input type="checkbox" id="${id}" ${on?'checked':''} data-cmd="${cmd}"><span class="b"></span><span>${label}</span></label>`; }
+/* hotkeys are stored in AutoHotkey notation (^Up, #Down, +!F9, XButton1); show them the way people say them */
+const KEY_NAMES={LButton:'Left click',RButton:'Right click',MButton:'Middle click',XButton1:'Mouse back',XButton2:'Mouse forward',
+  WheelUp:'Wheel up',WheelDown:'Wheel down',PgUp:'Page Up',PgDn:'Page Down',NumpadAdd:'Num +',NumpadSub:'Num −',NumpadMult:'Num *',NumpadDiv:'Num /',Escape:'Esc'};
+function prettyKey(s){
+  if(!s) return '';
+  let mods=[], i=0;
+  while(i<s.length-1 && '^!+#'.includes(s[i])){ mods.push({'^':'Ctrl','!':'Alt','+':'Shift','#':'Win'}[s[i]]); i++; }
+  const k=s.slice(i);
+  return [...mods, KEY_NAMES[k]||k.replace(/^Numpad(\d)$/,'Num $1')].join(' + ');
+}
+function keyBox(val,id){ const cap=capturing===id; return `<kbd class="${cap?'cap':(val?'':'empty')}" data-cap="${id}" title="Click, then press keys. Esc clears.">${cap?'Press…':(esc(prettyKey(val))||'–')}</kbd>`; }
 
 /* ---------- one set of delegated listeners: survives every re-render, nothing to rebind ---------- */
 const app = $('#app');
@@ -254,12 +404,52 @@ app.addEventListener('change', e=>{
   const el=e.target;
   if(el.type==='checkbox' && el.dataset.cmd) post(...el.dataset.cmd.split('|'), el.checked?1:0);
   else if(el.id==='targets' || el.id==='targets2') post('setTargets', el.value);
+  else if(el.dataset.env) post('env','slot',el.dataset.env,el.value);
   else if(el.dataset.sched) post('sched','row',...el.dataset.sched.split('|'), el.value);
   else if(el.type==='color' && el.dataset.slot) post('setThemeColor', el.dataset.slot, el.value.slice(1).toUpperCase());
 });
+/* a part-of-day time is sent when you leave the field or press Enter: sending every keystroke applied
+   half-typed times (e.g. 0 then 02 then 02:3) to the screens */
+/* plain 24-hour time fields (a native time box follows the PC's 12-hour format and changes with the mouse wheel
+   and arrow keys while it has focus, which flipped times such as 11 PM to 1 PM by accident).
+   Accepts 21:30, 2130, 930, 9, 9:30 pm, 12 am; anything else puts the old time back. */
+function parseTime(v){
+  const m=/^\s*(\d{1,2})(?::?(\d{2}))?\s*([ap])?\.?\s*m?\.?\s*$/i.exec(v||''); if(!m) return null;
+  let h=+m[1], mi=m[2]?+m[2]:0; const ap=(m[3]||'').toLowerCase();
+  if(ap){ if(h<1||h>12) return null; h=(h%12)+(ap==='p'?12:0); }
+  if(h>23||mi>59) return null;
+  return String(h).padStart(2,'0')+':'+String(mi).padStart(2,'0');
+}
+function commitWs(el){
+  if(!S || !S.warmSched) return;
+  const ph=S.warmSched.phases.find(p=>p.name===el.dataset.ws); if(!ph) return;
+  const t=parseTime(el.value);
+  if(!t){ el.value=ph.time; if(el.value!=='' ) toast('Use a 24-hour time like 21:30.'); return; }
+  el.value=t;
+  if(t===ph.time) return;
+  for(const st of [S, pendingState]) if(st && st.warmSched){ const p2=st.warmSched.phases.find(p=>p.name===el.dataset.ws); if(p2) p2.time=t; }
+  post('warmSched','time',el.dataset.ws,t);
+}
+app.addEventListener('focusout', e=>{ if(e.target.dataset && e.target.dataset.ws) commitWs(e.target); });
+app.addEventListener('keydown', e=>{
+  if(e.key==='Enter' && e.target.dataset && e.target.dataset.ws) e.target.blur();
+  if(e.key==='Enter' && e.target.id==='locq'){ searchPlace(); e.target.blur(); }   /* blur so the results are shown at once */
+});
+let lastPlaceQuery='';
+function searchPlace(){ const el=$('#locq'); const q=(el?el.value:'').replace(/\|/g,' ').trim(); if(!q) return; lastPlaceQuery=q; post('env','search',q); }
 app.addEventListener('click', e=>{
+  /* segmented buttons switch at once; the state push that follows confirms it */
+  const sb=e.target.closest('.seg button');
+  if(sb) sb.parentElement.querySelectorAll('button').forEach(b=>b.classList.toggle('on', b===sb));
   const k=e.target.closest('kbd[data-cap]');
   if(k){ capturing=k.dataset.cap; render(); post('capture',...capturing.split(':')); }
+});
+/* Esc closes the window (not while a hotkey is being captured, and a focused text field just loses focus) */
+document.addEventListener('keydown', e=>{
+  if(e.key!=='Escape' || capturing) return;
+  const a=document.activeElement;
+  if(a && a.tagName==='INPUT' && a.type!=='range' && a.type!=='checkbox'){ a.blur(); return; }
+  post(VIEW==='flyout' ? 'hideFlyout' : 'hideSettings');
 });
 app.addEventListener('mousedown', e=>{
   if(window.SD_NATIVE_DRAG) return;
@@ -269,126 +459,246 @@ app.addEventListener('mousedown', e=>{
 /* ---------- header ---------- */
 function header(sub, closeCmd){
   const right = VIEW==='flyout'
-    ? `<button class="icon-btn" title="Swap primary display" onclick="post('flipPrimary')">⇄</button><button class="icon-btn" title="Identify monitors" onclick="post('identify')">👁</button><button class="icon-btn big" title="Settings" onclick="post('openSettings')">⚙</button>`
+    ? `<button class="icon-btn" title="Swap primary display: make the next screen the main one" onclick="post('flipPrimary')">⇄</button><button class="icon-btn" title="Identify screens: show each screen's name on it" onclick="post('identify')">👁</button><button class="icon-btn big" title="Settings" onclick="post('openSettings')">⚙</button>`
     : `<button class="icon-btn close" title="Close" onclick="post('${closeCmd}')">✕</button>`;
   return `<div class="hdr" id="hdr"><div class="logo">☀</div><div class="t"><b>Smart Dimmer</b><span>${sub}</span></div>${right}</div>`;
 }
 
 /* ---------- flyout ---------- */
+/* The flyout is for everyday adjusting only; everything you set once lives in Settings. */
 function renderFlyout(){
   const anySplit = S.monitors.some(m=>m.split);
-  let h = header(`v${S.version} · drag to move`, 'closeFlyout') + `<div class="scroll stagger">`;
-  h += `<div class="sec">Targets</div><div class="card"><div class="row between">
-      <div class="row"><span class="muted">Targets</span><input class="field center" id="targets" value="${esc(S.targets)}" style="width:64px"></div>
-      <button class="btn sm ${S.linkAll?'primary':''}" onclick="post('toggleLinkAll')">${S.linkAll?'🔗 All linked':'⛓ Link all'}</button></div>
-      <div class="row between" style="margin-top:10px">${sw('schedOn','Schedule',S.sched.enabled,'sched|enabled')}
-      <span class="chip ${S.sched.enabled?'on':''}"><i class="dot"></i>${S.sched.enabled?'On':'Off'}</span></div>
-      <div class="note">${S.monitors.map(m=>`${m.idx} = ${esc(m.name)}`).join(' · ')}</div></div>`;
-  h += `<div class="sec">Master brightness</div>`;
-  if(anySplit) h += `<div class="note">Master sliders hidden while a monitor is Independent.</div>`;
-  else h += `<div class="card">${slider('hw','Hardware backlight',S.hw,'setHW')}${slider('sw','Software brightness',S.sw,'setSW')}
-      <div style="margin-top:10px">${sw('link','Move hardware and software together',S.linkHWSW,'setLinkHWSW')}</div></div>`;
-  h += `<div class="sec">Per-monitor</div>`;
-  for(const m of S.monitors){
-    h += `<div class="card mon ${m.split?'split':''}"><div class="row between"><div class="row"><span class="name">${esc(m.name)}</span><span class="badge">#${m.idx}</span>${cb('dim'+m.idx,'Dim',m.dim,'setDim|'+m.idx)}</div>
-      <button class="btn sm" onclick="post('toggleSplit',${m.idx})">${m.split?'🔓 Independent':'🔗 Follows master'}</button></div>
-      <div class="ind">${slider('mhw'+m.idx,'Hardware',m.hw,'setMonHW|'+m.idx,true)}${slider('msw'+m.idx,'Software',m.sw,'setMonSW|'+m.idx,true)}</div></div>`;
+  let h = header(`v${S.version} · drag to move`) + `<div class="scroll stagger">`;
+  h += `<div class="sec">Brightness</div>`;
+  if(anySplit) h += `<div class="card"><div class="muted">The shared sliders are hidden while a screen uses its own sliders. Turn off <b>Own sliders</b> on every screen to bring them back.</div></div>`;
+  else {
+    /* per-screen ticks under each shared slider: untick a screen to stop that adjustment on it at once */
+    const appliesTo=(tick)=>`<div class="ticks"><span class="lbl">Applies to</span>${S.monitors.map(m=>tick('f',m,esc(m.name))).join('')}</div>`;
+    h += `<div class="card">${slider('hw','Backlight',S.hw,'setHW')}${appliesTo(tickBL)}${slider('sw','Software brightness',S.sw,'setSW')}${appliesTo(tickSW)}
+      <div style="margin-top:12px">${sw('link','Move both together',S.linkHWSW,'setLinkHWSW')}</div>
+      <div class="note">Backlight changes the monitor itself. Software brightness darkens the picture and can go below the monitor's minimum. Untick a screen to leave it alone.</div></div>`;
   }
+  /* warmth: its own section below Brightness; each screen has its own Warmth tick */
+  h += `<div class="sec">Warmth</div><div class="card">${warmSlider(S.warmth)}<div class="ticks"><span class="lbl">Applies to</span>${S.monitors.map(m=>tickWM('f',m,esc(m.name))).join('')}</div>
+      <div class="note">Shifts the colours towards orange to cut blue light in the evening. Works on its own: a screen does not need software brightness for it.</div>
+      <div class="row between" style="margin-top:12px">${sw('wsOn','Change warmth by time of day',S.warmSched.enabled,'warmSched|enabled')}
+        <button class="btn sm ghost" onclick="post('openSettings','warmth')">Edit ›</button></div>
+      ${S.warmSched.enabled?`<div class="row between" style="gap:10px;align-items:flex-start"><div class="note">${esc(S.warmSched.status)}</div>${S.warmSched.paused?`<button class="btn sm" style="margin-top:6px" onclick="post('warmSched','resume')">Resume</button>`:''}</div>`:''}
+      ${S.nightLight?`<div class="warnline"><span>⚠</span><span>Windows Night Light is on as well. Both tint the screen, so they add up; turn one of them off.</span></div>`:''}</div>`;
+  h += `<div class="sec">Screens</div>`;
+  for(const m of S.monitors){
+    h += `<div class="card mon ${m.split?'split':''}"><div class="row between"><div class="row"><span class="name">${esc(m.name)}</span>${m.primary?'<span class="badge">Main</span>':''}</div>
+      ${sw('own'+m.idx,'Own sliders',m.split,'setSplit|'+m.idx)}</div>
+      ${anySplit && !m.split ? `<div class="ticks" style="margin:10px 0 0">${tickBL('c',m)}${tickSW('c',m)}</div>` : ''}
+      <div class="ind">${slider('mhw'+m.idx,'Backlight',m.hw,'setMonHW|'+m.idx,true,tickBL('o',m),!m.backlight)}${slider('msw'+m.idx,'Software brightness',m.sw,'setMonSW|'+m.idx,true,tickSW('o',m,'Software brightness'),!m.dim)}</div></div>`;
+  }
+  const sc=S.sched;
+  h += `<div class="sec">Schedule</div><div class="card"><div class="row between">${sw('schedOn','Change brightness by time of day',sc.enabled,'sched|enabled')}
+      <button class="btn sm ghost" onclick="post('openSettings','schedule')">Edit ›</button></div>
+      ${sc.enabled?`<div class="note">${esc(sc.status1)}</div>`:''}</div>`;
   h += `</div>`;
   return h;
 }
 
 /* ---------- settings ---------- */
-const NAV=[['brightness','☀','Brightness'],['monitors','🖥','Monitors & keys'],['schedule','⏰','Schedule'],['appearance','🎨','Appearance'],['defaults','💾','Defaults']];
+/* one topic per page; every page opens with a line saying what it is for */
+const NAV=[['brightness','☀','Brightness'],['warmth','🌙','Warmth'],['screens','🖥','Screens'],['hotkeys','⌨','Hotkeys'],['schedule','⏰','Schedule'],['appearance','🎨','Appearance'],['general','⚙','General']];
+const PAGE_ALIAS={monitors:'screens', displays:'screens', defaults:'general', nightlight:'warmth'};
+function intro(title, text){ return `<div class="intro"><h2>${title}</h2><p>${text}</p></div>`; }
 function renderSettings(){
-  const anySplit = S.monitors.some(m=>m.split);
   let h = header('Settings', 'hideSettings') + `<div class="settings"><div class="nav">`;
   for(const [id,ic,lab] of NAV) h += `<button class="${page===id?'on':''}" onclick="go('${id}')"><span>${ic}</span>${lab}</button>`;
   h += `<div class="spacer"></div><div class="small muted" style="padding:0 12px">v${S.version}</div></div><div class="content">`;
 
   /* brightness */
   h += `<div class="page ${page==='brightness'?'on':''} stagger" id="p_brightness">
-    <div class="sec">Targets</div><div class="card"><div class="row between">
-      <div class="row"><span class="muted">Monitor targets</span><input class="field center" id="targets2" value="${esc(S.targets)}" style="width:80px"></div>
-      <button class="btn ${S.linkAll?'primary':''}" onclick="post('toggleLinkAll')">${S.linkAll?'🔗 All displays linked':'⛓ Link all displays'}</button></div>
-      <div class="note">Numbers, comma separated. ${S.monitors.map(m=>`${m.idx} = ${esc(m.name)}`).join(' · ')}</div></div>
-    <div class="sec">Master brightness</div>` +
-    (anySplit ? `<div class="note">Master sliders hidden while a monitor is Independent. Set every monitor to "Follows master" to show them.</div>` :
-    `<div class="card">${slider('hw2','Hardware backlight',S.hw,'setHW')}${slider('sw2','Software brightness',S.sw,'setSW')}
-      <div style="margin-top:10px">${sw('link2','Move hardware and software sliders together',S.linkHWSW,'setLinkHWSW')}</div></div>`) +
-    `<div class="sec">Dimming curve</div><div class="card"><div class="grid2"><div>
+    ${intro('Brightness','How the brightness sliders and hotkeys behave. The sliders themselves are in the flyout: click the tray icon.')}
+    <div class="card">${sw('link2','Move backlight and software brightness together',S.linkHWSW,'setLinkHWSW')}
+      <div class="sl small" style="margin-top:10px"><div class="lab"><span class="n">Hotkey step</span><span class="v" id="v_step">${S.step}%</span></div><input type="range" min="1" max="20" value="${S.step}" id="step" data-cmd="setStep" style="--p:${(S.step-1)/19*100}%"></div>
+      <div class="note">How much one hotkey press changes the brightness.</div>
+      <div style="margin-top:12px">${sw('smooth','Smooth transitions',S.smooth,'setSmooth')}</div>
+      <div class="note">Fades software brightness and warmth over a fifth of a second instead of jumping, when they change by more than a few percent. The backlight changes at the monitor's own pace.</div></div>
+    <div class="sec">Software dimming curve</div><div class="card"><div class="grid2"><div>
       <div class="row between"><span class="muted">Type</span><span class="seg"><button class="${S.curve==='linear'?'on':''}" onclick="post('setCurve','linear')">Linear</button><button class="${S.curve==='exponential'?'on':''}" onclick="post('setCurve','exponential')">Exponential</button></span></div>
       <div style="margin-top:10px">${cb('inv','Invert curve',S.invert,'setInvert')}</div>
       <div class="sl small"><div class="lab"><span class="n">Curve factor</span><span class="v" id="v_factor">${(S.factor/10).toFixed(1)}</span></div><input type="range" min="10" max="50" value="${S.factor}" id="factor" data-cmd="setFactor" data-suffix="" data-scale="0.1" style="--p:${(S.factor-10)/40*100}%"></div>
-      <div class="sl small"><div class="lab"><span class="n">Max dimming (0–255)</span><span class="v" id="v_maxdark">${S.maxDark}</span></div><input type="range" min="0" max="255" value="${S.maxDark}" id="maxdark" data-cmd="setMaxDark" data-suffix="" style="--p:${S.maxDark/255*100}%"></div>
-      <div class="sl small"><div class="lab"><span class="n">Hotkey step</span><span class="v" id="v_step">${S.step}%</span></div><input type="range" min="1" max="20" value="${S.step}" id="step" data-cmd="setStep" style="--p:${(S.step-1)/19*100}%"></div>
-    </div><div><canvas id="curve" width="420" height="380"></canvas><div class="note">Preview of software brightness mapping.</div></div></div></div>
-    <div class="sec">General</div><div class="card"><div class="row" style="gap:24px;flex-wrap:wrap">${sw('startup','Start with Windows',S.startup,'setStartup')}${sw('usedef','Load my defaults at startup',S.useDefaults,'setUseDefaults')}</div></div></div>`;
+      <div class="sl small"><div class="lab"><span class="n">Darkest software level (0–255)</span><span class="v" id="v_maxdark">${S.maxDark}</span></div><input type="range" min="0" max="255" value="${S.maxDark}" id="maxdark" data-cmd="setMaxDark" data-suffix="" style="--p:${S.maxDark/255*100}%"></div>
+      <div class="note">Lower values let software brightness go darker at 0%.</div>
+    </div><div><canvas id="curve" width="420" height="380"></canvas><div class="note">How the software brightness slider maps to the screen. Exponential gives finer control near the dark end.</div></div></div></div></div>`;
 
-  /* monitors & hotkeys */
-  h += `<div class="page ${page==='monitors'?'on':''} stagger" id="p_monitors"><div class="sec">Per-monitor</div>`;
+  /* warmth: f.lux-style schedule with three parts of the day */
+  const ws=S.warmSched;
+  const phaseCard=ph=>`<div class="card phase ${ws.enabled&&ws.now===ph.name?'now':''}">
+      <div class="ph-h"><span class="ic">${PHASE_ICON[ph.name]||''}</span>${ph.name}${ws.enabled&&ws.now===ph.name?'<span class="badge">Now</span>':''}</div>
+      <div class="ph-t"><span class="muted">Starts at</span><input type="text" class="field timef" value="${esc(ph.time)}" data-ws="${ph.name}" maxlength="8" placeholder="HH:mm" spellcheck="false" autocomplete="off" title="24-hour time, e.g. 21:30 (2130 and 9:30 pm work too)"></div>
+      ${warmSlider(ph.level,'ws_'+ph.name,'warmSched|level|'+ph.name,'Warmth','Neutral',true)}</div>`;
+  h += `<div class="page ${page==='warmth'?'on':''} stagger" id="p_warmth">
+    ${intro('Warmth','Warms the colours in the evening to cut blue light, the way f.lux does. Choose how warm each part of the day is and when it starts; the screens change gently in between.')}
+    <div class="card"><div class="row between">${sw('ws2','Change warmth by time of day',ws.enabled,'warmSched|enabled')}${ws.paused?`<button class="btn sm" onclick="post('warmSched','resume')">Resume schedule</button>`:''}</div>
+      <div class="status" style="margin-top:8px">${esc(ws.status)}</div>
+      <canvas id="warmchart"></canvas>
+      <div class="note">Your day from noon to noon: the higher and more orange the curve, the warmer the screens. The line marks now.</div></div>
+    <div class="grid3">${ws.phases.map(phaseCard).join('')}</div>
+    <div class="card"><div class="row between" style="gap:16px;flex-wrap:wrap"><span>Transition</span><span class="seg">${[[0,'Instant'],[20,'20 min'],[60,'1 hour'],[120,'2 hours']].map(([v,l])=>`<button class="${ws.fade===v?'on':''}" onclick="post('warmSched','fade',${v})">${l}</button>`).join('')}</span></div>
+      <div class="note">${transitionNote(ws)}</div></div>
+    <div class="note">Moving a part's slider shows that warmth on the screens for a moment. Which screens are warmed is set with the Warmth ticks in the flyout or on the Screens page. Moving the flyout's Warmth slider pauses the schedule until the next part of the day.</div></div>`;
+
+  /* screens */
+  h += `<div class="page ${page==='screens'?'on':''} stagger" id="p_screens">
+    ${intro('Screens','What each screen responds to, and which screen is the main one.')}
+    <div class="row" style="justify-content:flex-end;margin-top:6px"><button class="btn sm" onclick="post('identify')">👁 Identify screens</button></div>`;
   for(const m of S.monitors){
-    h += `<div class="card mon ${m.split?'split':''}"><div class="row between"><div class="row"><span class="name">${esc(m.name)}</span><span class="badge">#${m.idx}</span><span class="badge">${m.split?'Independent':'Follows master'}</span></div>
-      <div class="row">${cb('sdim'+m.idx,'Apply dim',m.dim,'setDim|'+m.idx)}<button class="btn sm" onclick="post('toggleSplit',${m.idx})">${m.split?'🔓 Independent':'🔗 Follows master'}</button></div></div>
-      <div class="ind">${slider('smhw'+m.idx,'Hardware',m.hw,'setMonHW|'+m.idx,true)}${slider('smsw'+m.idx,'Software',m.sw,'setMonSW|'+m.idx,true)}</div></div>`;
+    h += `<div class="card"><div class="row between"><div class="row"><span class="name">${esc(m.name)}</span><span class="badge">#${m.idx}</span>${m.primary?'<span class="badge">Main</span>':''}</div>
+      <span class="muted small">${m.split?'Uses its own sliders':'Uses the shared sliders'}</span></div>
+      <div class="row" style="gap:22px;margin-top:10px;flex-wrap:wrap">${cb('bl'+m.idx,'Change its backlight',m.backlight,'setBacklight|'+m.idx)}${cb('sdim'+m.idx,'Change its software brightness',m.dim,'setDim|'+m.idx)}${cb('swarm'+m.idx,'Apply warmth',m.warm,'setWarm|'+m.idx)}</div></div>`;
   }
+  h += `<div class="note">The same ticks are in the flyout for quick switching. Unticked, Smart Dimmer leaves that adjustment alone on the screen: software brightness and warmth go back to normal at once, the backlight stays where it is. Warmth does not need software brightness: a screen can be warmed without being dimmed. Backlight works on screens that support DDC/CI (most external monitors) and on laptop panels; software brightness works on every screen.</div>`;
   const pd=S.primary||{};
-  h += `<div class="sec">Primary display</div><div class="card"><div class="row between" style="gap:16px">
-      <div><div><span class="name">${esc(pd.name||'?')}</span> <span class="muted">#${pd.index||'?'} · ${esc(pd.device||'')} · ${pd.count||0} active display${pd.count===1?'':'s'}</span></div>
-      <div class="status" style="margin-top:4px">Power check: ${esc(pd.power||'not running')}${pd.lastEvent?'<br>'+esc(pd.lastEvent):''}</div></div>
-      <button class="btn primary" onclick="post('flipPrimary')">⇄ Swap primary display</button></div>
-    <div style="margin-top:12px">${sw('pguard','Auto-switch the primary display when it stops receiving power',pd.guard,'setPrimaryGuard')}</div>
-    <div class="row" style="margin-top:10px"><span class="muted">Swap hotkey</span>${keyBox(S.hotkeys.master.Flip,'master:Flip')}<span class="muted small">(also in the tray menu and the flyout header)</span></div>
-    <div class="note">The primary monitor is asked for its power state over DDC/CI every 5 seconds. If it reports off, or stops answering after having answered before, for 3 checks in a row while another display is on, the next display becomes primary. Windows switching all displays off to save power is ignored. Laptop panels have no DDC/CI and cannot be checked.</div></div>`;
-  h += `<div class="sec">Hotkeys</div><div class="card"><table class="hk"><tr><th></th>${KINDS.map(k=>`<th>${KIND_LABEL[k]}</th>`).join('')}</tr>
-    <tr><td>Master</td>${KINDS.map(k=>`<td>${keyBox(S.hotkeys.master[k],'master:'+k)}</td>`).join('')}</tr>`;
-  for(const m of S.monitors) h += `<tr><td>${esc(m.name)} <span class="muted small">#${m.idx}</span></td>${KINDS.map(k=>`<td>${keyBox((S.hotkeys.monitors[m.idx]||{})[k],'mon:'+m.idx+':'+k)}</td>`).join('')}</tr>`;
-  h += `</table><div class="note">Click a key box, then press the new combination (mouse buttons work too). Esc clears it. A key can only live in one box. Display rows adjust that display only and switch it to Independent.</div></div></div>`;
+  h += `<div class="sec">Main screen</div><div class="card"><div class="row between" style="gap:16px">
+      <div><div><span class="name">${esc(pd.name||'?')}</span> <span class="muted">${pd.count||0} screen${pd.count===1?'':'s'} connected</span></div>
+      <div class="status" style="margin-top:4px">Power check: ${esc(pd.power||'off')}${pd.lastEvent?'<br>'+esc(pd.lastEvent):''}</div></div>
+      <button class="btn primary" onclick="post('flipPrimary')">⇄ Make the next screen main</button></div>
+    <div style="margin-top:12px">${sw('pguard','Switch the main screen automatically when it loses power',pd.guard,'setPrimaryGuard')}</div>
+    <div class="note">Checks the main screen every 5 seconds over DDC/CI; after 3 failed checks in a row, while another screen is on, the next screen becomes main. Ignored while Windows itself has the screens off. Laptop panels cannot be checked.</div></div></div>`;
+
+  /* hotkeys */
+  h += `<div class="page ${page==='hotkeys'?'on':''} stagger" id="p_hotkeys">
+    ${intro('Hotkeys','Keyboard shortcuts that work everywhere. Click a box and press the keys (mouse buttons work too); Esc clears it. A key can only be used once.')}
+    <div class="card"><table class="hk"><tr><th></th>${KINDS.map(k=>`<th>${KIND_LABEL[k]}</th>`).join('')}</tr>
+    <tr><td>All screens</td>${KINDS.map(k=>`<td>${keyBox(S.hotkeys.master[k],'master:'+k)}</td>`).join('')}</tr>`;
+  for(const m of S.monitors) h += `<tr><td>${esc(m.name)}</td>${KINDS.map(k=>`<td>${keyBox((S.hotkeys.monitors[m.idx]||{})[k],'mon:'+m.idx+':'+k)}</td>`).join('')}</tr>`;
+  h += `</table><div class="note">A screen's own row changes only that screen, and switches it to its own sliders.</div></div>
+    <div class="card"><div class="row between"><span>Make the next screen main</span>${keyBox(S.hotkeys.master.Flip,'master:Flip')}</div></div>
+    <div class="card">${sw('osd','Show an on-screen indicator',S.osd,'setOsd')}
+      <div class="note">When a brightness hotkey is used, a small bar near the bottom of the screen shows the new level for a moment. It appears on the screen that changed, or for the all-screens keys, on the screen under the mouse.</div></div></div>`;
 
   /* schedule */
   const sc=S.sched;
-  h += `<div class="page ${page==='schedule'?'on':''} stagger" id="p_schedule"><div class="sec">Scheduled brightness</div>
-    <div class="card"><div class="row between">${sw('sched2','Enable the schedule',sc.enabled,'sched|enabled')}<button class="btn sm" onclick="post('sched','applyNow')">Apply now</button></div>
+  h += `<div class="page ${page==='schedule'?'on':''} stagger" id="p_schedule">
+    ${intro('Schedule','Set brightness by time of day. Adjusting brightness by hand pauses the schedule until its next time. Warmth has its own schedule on the Warmth page.')}
+    <div class="card"><div class="row between">${sw('sched2','Change brightness by time of day',sc.enabled,'sched|enabled')}<button class="btn sm" onclick="post('sched','applyNow')">Apply now</button></div>
     <div class="status" style="margin-top:8px">${esc(sc.status1)}<br>${esc(sc.status2)}</div></div>
-    <div class="card"><table class="sch"><tr><th>On</th><th>Time (HH:mm)</th><th>Hardware %</th><th>Software %</th><th></th></tr>`;
+    <div class="card"><table class="sch"><tr><th>On</th><th>Time (HH:mm)</th><th>Backlight %</th><th>Software %</th><th></th></tr>`;
   sc.rows.forEach((r,i)=>{ const n=i+1; h += `<tr><td>${cb('sr'+n,'',r.on,'sched|row|'+n+'|on')}</td>
     <td><input class="field center" style="width:80px" value="${esc(r.time)}" data-sched="${n}|time" placeholder="07:30"></td>
     <td><input class="field center" style="width:70px" type="number" min="0" max="100" value="${r.hw}" data-sched="${n}|hw"></td>
     <td><input class="field center" style="width:70px" type="number" min="0" max="100" value="${r.sw}" data-sched="${n}|sw"></td>
     <td><button class="btn sm ghost" onclick="post('sched','useCurrent',${n})">Use current</button></td></tr>`; });
   h += `</table></div><div class="card"><div class="sl small"><div class="lab"><span class="n">Fade into each entry over</span><span class="v" id="v_fade">${sc.fade} min</span></div><input type="range" min="0" max="120" value="${sc.fade}" id="fade" data-cmd="sched|fade" data-suffix=" min" style="--p:${sc.fade/120*100}%"></div>
-    <div style="margin-top:8px">${cb('schind','Also adjust Independent monitors',sc.includeIndependent,'sched|includeIndependent')}</div>
-    <div class="note">Entries wrap past midnight: before the first time, the last entry of the day applies. Moving a slider or using a hotkey pauses the schedule until the next entry.</div></div></div>`;
+    <div style="margin-top:8px">${cb('schind','Also change screens that use their own sliders',sc.includeIndependent,'sched|includeIndependent')}</div>
+    <div class="note">Entries wrap past midnight: before the first time of the day, the last entry applies.</div></div></div>`;
 
   /* appearance */
-  h += `<div class="page ${page==='appearance'?'on':''} stagger" id="p_appearance"><div class="sec">Theme</div><div class="theme-grid">`;
-  for(const name of S.themeOrder){ const t=S.themes[name]; h += `<div class="theme ${S.theme===name?'on':''}" onclick="post('setTheme','${esc(name)}')" style="background:#${t.bg};color:#${t.text}"><b style="color:#${t.accent}">${name==='Wallpaper'?'🖼 ':''}${esc(name)}</b>${name==='Wallpaper'?'<div class="small" style="opacity:.7;margin-top:2px">follows each screen\'s wallpaper</div>':''}
-    <div class="sw3"><i style="background:#${t.input}"></i><i style="background:#${t.accent}"></i><i style="background:#${t.sliderFill}"></i><i style="background:#${t.text}"></i></div></div>`; }
-  h += `</div>`;
+  h += `<div class="page ${page==='appearance'?'on':''} stagger" id="p_appearance">
+    ${intro('Appearance','Colours, theme and glass effect of these windows.')}<div class="sec">Theme</div><div class="theme-grid">`;
+  for(const name of S.themeOrder){ const t=S.themes[name], a2=t.accent2||t.accent;
+    const tileBg = (name==='Northern Lights' ? `linear-gradient(100deg,transparent 14%,#${t.accent}70 30%,transparent 46%),linear-gradient(104deg,transparent 50%,#${a2}78 65%,transparent 82%),` : '')
+      + (S.lively ? `radial-gradient(120% 90% at 100% 0%,#${a2}2e,transparent 60%),radial-gradient(90% 80% at 0% 100%,#${t.accent}22,transparent 60%),#${t.bg}` : `#${t.bg}`);
+    h += `<div class="theme ${S.theme===name?'on':''}" onclick="post('setTheme','${esc(name)}')" style="background:${tileBg};color:#${t.text}"><b style="color:#${t.accent}">${name==='Wallpaper'?'🖼 ':name==='Sky'?'🌤 ':''}${esc(name)}</b>${name==='Wallpaper'?'<div class="small" style="opacity:.7;margin-top:2px">follows each screen\'s wallpaper</div>':name==='Sky'?'<div class="small" style="opacity:.7;margin-top:2px">follows the sun and the weather</div>':''}
+    <div class="sw3"><i style="background:#${t.input}"></i><i style="background:linear-gradient(90deg,#${t.accent},#${a2})"></i><i style="background:#${t.sliderFill}"></i><i style="background:#${t.text}"></i></div></div>`; }
+  h += `</div><div class="card" style="margin-top:12px">${sw('lively','Lively effects',S.lively,'setLively')}
+    <div class="note">Soft moving glows behind the cards and two-tone gradients, from the theme's accent and second accent. Turn off for a calmer, flat look. Motion stops when Windows is set to reduce animations.</div></div>`;
   if(S.theme==='Wallpaper') h += `<div class="card" style="margin-top:12px"><div class="sl small"><div class="lab"><span class="n">🖼 Wallpaper theme: colour intensity</span><span class="v" id="v_wpint">${S.wpIntensity}%</span></div><input type="range" min="25" max="100" value="${S.wpIntensity}" id="wpint" data-cmd="setWpIntensity" style="--p:${(S.wpIntensity-25)/75*100}%"></div>
     <div class="note">Colours are taken from the wallpaper of the screen a window is on and matched by area: each window measures how much of it the cards, background, buttons, lines, slider fills and accents really cover, and the colour covering most of the picture goes to the largest of those, the next to the next, down to the rarest colour on the smallest. Higher intensity pushes the colours further into the surfaces.</div>
     <div style="margin-top:10px">${sw('wpfrost','Frosted wallpaper behind the glass',S.wpFrost,'setWpFrost')}</div>
     <div class="note">With glass on: instead of only blurring whatever is behind the window, also draw a frosted copy of the wallpaper area behind it (aligned to the screen), so the window looks like glass on your wallpaper even when other apps are behind it.</div></div>`;
+  /* automatic theme by time of day and weather; the place is shared with the Sky theme */
+  const env=S.env;
+  const SLOT_ICON={Morning:'🌅',Day:'☀️',Evening:'🌇',Night:'🌙',Cloudy:'☁️',Rain:'🌧️',Snow:'❄️',Storm:'⛈️',Fog:'🌫️'};
+  const themeOpts=(sel,none)=>(none?`<option value="" ${sel===''?'selected':''}>No change</option>`:'')+S.themeOrder.map(n=>`<option value="${esc(n)}" ${sel===n?'selected':''}>${esc(n)}</option>`).join('');
+  /* "Now" on a weather slot only while that weather really decides the theme */
+  /* badge: how much of the palette comes from that slot right now (100 % = Now) */
+  const slotSel=(slot,none)=>{ const pct=(env.weights||{})[slot]||0;
+    return `<label class="slot ${pct?'now':''}"><span>${SLOT_ICON[slot]} ${slot}${pct?`<span class="badge">${pct>=100?'Now':pct+'%'}</span>`:''}</span><select class="field" data-env="${slot}">${themeOpts(env.map[slot]||'',none)}</select></label>`; };
+  h += `<div class="sec">Automatic theme</div><div class="card">${sw('autoth','Change the theme with the time of day and the weather',env.auto,'env|auto')}
+    <div class="status" style="margin-top:8px">${esc(env.status)}${env.auto&&env.showing?` Showing <b>${esc(env.showing)}</b>.`:''}</div></div>`;
+  if(env.auto) h += `<div class="note" style="margin-top:6px">The theme tiles above turn the automatic theme off when picked.</div>`;
+  if(env.auto || S.theme==='Sky'){
+    h += `<div class="card">${S.theme==='Sky'?`<div class="note" style="margin:0 0 10px">🌤 The Sky theme's colours follow the sun (night, blue hour, sunrise, golden hour, day) and are tinted by the weather: grey when cloudy, slate when raining, icy when snowing, violet with yellow when stormy, muted in fog.</div>`:''}
+      <div class="row between" style="gap:10px;flex-wrap:wrap"><div><div class="muted small">Place</div><div class="name">${env.located?'📍 '+esc(env.place):'No place chosen'}</div>${env.wline?`<div class="status">${esc(env.wline)}</div>`:''}</div>
+      <div class="row">${env.located?`<button class="btn sm" onclick="post('env','refresh')">↻ Update weather</button><button class="btn sm ghost" onclick="post('env','clearPlace')">Forget place</button>`:''}</div></div>
+      <div class="row" style="gap:8px;margin-top:10px"><input class="field" id="locq" style="flex:1" placeholder="${env.located?'Search for another city or town':'Search for your city or town'}" value="${esc(lastPlaceQuery)}"><button class="btn sm" onclick="searchPlace()">${env.searching?'Searching…':'Search'}</button></div>
+      ${env.results.length?`<div class="places">${env.results.map((r,i)=>`<button class="place" onclick="lastPlaceQuery='';post('env','pick',${i+1})">📍 ${esc(r.label)}</button>`).join('')}</div>`:''}
+      <div class="note">Sunrise and sunset are worked out on this PC from the place's position. Only the current weather comes from the internet: the place's coordinates are sent to Open-Meteo every 20 minutes, and only while the automatic theme or the Sky theme is in use. Weather data by Open-Meteo.com (CC BY 4.0).</div></div>`;
+  }
+  if(env.auto){
+    h += `<div class="card"><div class="muted small" style="margin-bottom:6px">Theme for each part of the day</div><div class="slotgrid">${['Morning','Day','Evening','Night'].map(x=>slotSel(x,false)).join('')}</div>
+      <div class="muted small" style="margin:14px 0 6px">Theme mixed in while the weather is…</div><div class="slotgrid five">${['Cloudy','Rain','Snow','Storm','Fog'].map(x=>slotSel(x,true)).join('')}</div>
+      <div class="sl small" style="margin-top:12px"><div class="lab"><span class="n">How much the weather colours the theme</span><span class="v" id="v_wstr">${env.strength}%</span></div><input type="range" min="10" max="100" value="${env.strength}" id="wstr" data-cmd="env|strength" style="--p:${(env.strength-10)/90*100}%"></div>
+      <div class="row between" style="margin-top:12px;gap:10px;flex-wrap:wrap"><span>Weather colours the theme</span><span class="seg"><button class="${env.scope==='day'?'on':''}" onclick="post('env','scope','day')">In daylight</button><button class="${env.scope==='always'?'on':''}" onclick="post('env','scope','always')">Day and night</button></span></div>
+      <div class="note">The themes are blended, not swapped: around dawn and dusk the neighbouring parts of the day cross-fade as the sun moves, and the weather's theme is mixed in by the amount above. Clear skies add nothing; <b>No change</b> leaves that weather out. With <b>In daylight</b>, nights are never tinted by the weather. Any theme works here, Sky and Wallpaper included.</div></div>`;
+  }
   h += `<div class="sec">Window background</div><div class="card"><div class="row between">${sw('glass','Transparent glass (blurs whatever is behind the window)',S.glass,'setGlass')}<span class="chip ${S.glass?'on':''}"><i class="dot"></i>${S.glass?'Glass':'Solid'}</span></div>
     <div class="sl small" style="margin-top:10px"><div class="lab"><span class="n">Tint opacity</span><span class="v" id="v_glassop">${S.glassOpacity}%</span></div><input type="range" min="20" max="95" value="${S.glassOpacity}" id="glassop" data-cmd="setGlassOpacity" style="--p:${(S.glassOpacity-20)/75*100}%" ${S.glass?'':'disabled'}></div>
     <div class="note">Lower opacity shows more of the desktop through the window. Applies to the flyout and this window. Needs Windows 10 (1803 or newer) or Windows 11.</div></div>`;
-  const tcol=S.themes[S.theme]||S.themes.Custom, wpSel=S.theme==='Wallpaper';
-  h += `<div class="sec">Colours of ${esc(S.theme)}</div><div class="card"><div class="row between" style="gap:10px;flex-wrap:wrap"><span class="muted" style="flex:1;min-width:240px">${wpSel
-      ? 'The Wallpaper palette is generated from your wallpaper. Picking a colour copies the current palette into Custom, applies your colour there and switches to Custom.'
+  const tcol=S.themes[S.theme]||S.themes.Custom, wpSel=S.theme==='Wallpaper'||S.theme==='Sky'||S.theme==='Automatic';
+  h += `<div class="sec">Colours of ${S.theme==='Automatic'?'the automatic blend':esc(S.theme)}</div><div class="card"><div class="row between" style="gap:10px;flex-wrap:wrap"><span class="muted" style="flex:1;min-width:240px">${wpSel
+      ? (S.theme==='Sky' ? 'The Sky palette changes with the sun and the weather.' : S.theme==='Automatic' ? 'The automatic palette is a blend of your chosen themes and changes through the day; editing it turns the automatic theme off.' : 'The Wallpaper palette is generated from your wallpaper.')+' Picking a colour copies the current palette into Custom, applies your colour there and switches to Custom.'
       : 'Pick any colour; it applies live to this theme and is remembered. Every theme can be tuned this way.'}</span>
     <div class="row">${wpSel ? '' : `<button class="btn sm" onclick="post('resetTheme')">↺ Reset to original</button>`}${S.theme==='Custom' ? '' : `<button class="btn sm" onclick="post('copyPreset')">Copy to Custom</button>`}</div></div><div class="swatches">`;
   for(const [slot,label] of S.colorSlots){ const v=tcol[slot]; h += `<div class="swatch"><span>${esc(label)}</span><label style="background:#${v}"><input type="color" value="#${v}" data-slot="${slot}"></label></div>`; }
   h += `</div></div></div>`;
 
-  /* defaults */
-  h += `<div class="page ${page==='defaults'?'on':''} stagger" id="p_defaults"><div class="sec">Defaults</div><div class="card">
+  /* general */
+  h += `<div class="page ${page==='general'?'on':''} stagger" id="p_general">
+    ${intro('General','Starting with Windows, saved defaults, and where Smart Dimmer keeps its files.')}
+    <div class="card">${sw('startup','Start with Windows',S.startup,'setStartup')}</div>
+    <div class="card">${sw('memsaver','Free memory when the windows are closed',S.memSaver,'setMemSaver')}
+      <div class="note">A minute after both windows are closed, Smart Dimmer shuts down its window engine (Microsoft Edge WebView2), so in the background it uses only a few MB. Hotkeys, the schedules and the automatic theme keep working. Opening a window after that takes a moment longer. Turn off to keep the windows ready (about 250 MB, mostly paged out).</div></div>
+    <div class="sec">Defaults</div><div class="card">
     <div class="row" style="gap:10px;flex-wrap:wrap"><button class="btn" onclick="post('saveDefaults')">💾 Save current as defaults</button><button class="btn" onclick="post('restoreDefaults')">↩ Restore my defaults</button><button class="btn danger" onclick="post('factoryReset')">🏭 Factory reset</button></div>
     <div style="margin-top:12px">${sw('usedef2','Load my defaults at startup instead of last-used values',S.useDefaults,'setUseDefaults')}</div>
-    <div class="note">Save stores everything: brightness, targets, monitors, hotkeys, schedule, curve, theme and custom colours. Factory reset keeps your saved defaults.</div></div></div>`;
+    <div class="note">Defaults store everything: brightness, screens, hotkeys, schedule, curve, theme and colours. Factory reset keeps your saved defaults.</div></div>
+    <div class="sec">About</div><div class="card"><div class="row between" style="gap:12px;flex-wrap:wrap"><div><b>Smart Dimmer</b> <span class="muted">version ${esc(S.version)}</span>
+      <div class="muted small" style="margin-top:4px">Settings and log: ${esc(S.dataDir||'')}</div></div>
+      <div class="row"><button class="btn sm" onclick="post('openDataFolder')">📂 Open folder</button><button class="btn sm" onclick="post('openProject')">Project page</button></div></div></div></div>`;
   h += `</div></div>`;
   return h;
 }
-function go(p){ page=p; render(); }
+function go(p){ page=PAGE_ALIAS[p]||p; render(); const c=$('.content'); if(c) c.scrollTop=0; }
+function drawWarmChart(){
+  const c=$('#warmchart'), ws=S&&S.warmSched; if(!c||!ws||!ws.curve||!ws.curve.length) return;
+  const W=c.clientWidth, H=c.clientHeight; if(!W||!H) return;
+  const d=devicePixelRatio||1; c.width=Math.round(W*d); c.height=Math.round(H*d);
+  const ctx=c.getContext('2d'); ctx.scale(d,d);
+  const cs=getComputedStyle(document.documentElement), col=n=>cs.getPropertyValue(n).trim();
+  const L=12,R=12,T=50,B=26, pw=W-L-R, ph=H-T-B, n=ws.curve.length-1;
+  const X=i=>L+i/n*pw, Y=v=>T+(1-v/100)*ph, clampX=(x,m)=>Math.min(Math.max(x,L+m),W-R-m);
+  /* hour grid, noon to noon */
+  ctx.font='11px "Segoe UI"'; ctx.textAlign='center'; ctx.fillStyle=col('--muted'); ctx.strokeStyle=col('--grid'); ctx.setLineDash([3,5]); ctx.lineWidth=1;
+  ['12:00','18:00','00:00','06:00','12:00'].forEach((lab,k)=>{ const x=L+k/4*pw; ctx.beginPath(); ctx.moveTo(x,T); ctx.lineTo(x,T+ph); ctx.stroke(); ctx.fillText(lab,clampX(x,16),H-8); });
+  ctx.setLineDash([]);
+  /* the curve, filled with the colour of the light at each moment */
+  const g=ctx.createLinearGradient(L,0,L+pw,0);
+  ws.curve.forEach((v,i)=>{ const [r,gg,b]=warmDisplayRGB(v); g.addColorStop(i/n,`rgb(${r},${gg},${b})`); });
+  ctx.globalAlpha=ws.enabled?1:.45;
+  ctx.beginPath(); ctx.moveTo(X(0),T+ph); ws.curve.forEach((v,i)=>ctx.lineTo(X(i),Y(v))); ctx.lineTo(X(n),T+ph); ctx.closePath();
+  /* fill: the warmth colour, fading towards the bottom */
+  ctx.save(); ctx.clip(); ctx.globalAlpha*=.6; ctx.fillStyle=g; ctx.fillRect(L,T,pw,ph);
+  const fade=ctx.createLinearGradient(0,T,0,T+ph); fade.addColorStop(0,'rgba(0,0,0,0)'); fade.addColorStop(1,col('--graphBg')||'#000');
+  ctx.globalAlpha=ws.enabled?.85:.4; ctx.fillStyle=fade; ctx.fillRect(L,T,pw,ph); ctx.restore();
+  ctx.beginPath(); ws.curve.forEach((v,i)=>i?ctx.lineTo(X(i),Y(v)):ctx.moveTo(X(i),Y(v)));
+  ctx.strokeStyle=g; ctx.lineWidth=3; ctx.lineJoin='round'; ctx.stroke();
+  /* where each part of the day starts */
+  /* where each part of the day starts; labels closer than a label's width go on a second row */
+  ctx.font='12px "Segoe UI"'; ctx.fillStyle=col('--text'); ctx.strokeStyle=col('--line'); ctx.lineWidth=1;
+  const marks=[];
+  for(const p of ws.phases){ const m=/^(\d{1,2}):(\d{2})$/.exec(p.time); if(!m) continue;
+    marks.push({x:L+((((+m[1])*60+(+m[2])-720+1440)%1440)/1440)*pw, text:`${PHASE_ICON[p.name]||''} ${p.name} ${p.time}`}); }
+  marks.sort((a,b)=>a.x-b.x);
+  let lastEnd=-1e9;
+  for(const mk of marks){ const w=ctx.measureText(mk.text).width, cx=clampX(mk.x,w/2+2);
+    const row=(cx-w/2 < lastEnd+8) ? 1 : 0; if(!row) lastEnd=cx+w/2;
+    const y=row?34:16;
+    ctx.beginPath(); ctx.moveTo(mk.x,y+4); ctx.lineTo(mk.x,T+ph); ctx.stroke();
+    ctx.fillText(mk.text, cx, y); }
+  /* now, from this computer's clock so the line moves between updates */
+  ctx.globalAlpha=1;
+  const dt=new Date(), nowPos=(((dt.getHours()*60+dt.getMinutes()+dt.getSeconds()/60)-720+1440)%1440)/1440;
+  const nx=L+nowPos*pw, nv=ws.curve[Math.round(nowPos*n)]||0;
+  ctx.strokeStyle=col('--accent'); ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(nx,T-2); ctx.lineTo(nx,T+ph); ctx.stroke();
+  ctx.beginPath(); ctx.arc(nx,Y(nv),5,0,Math.PI*2); ctx.fillStyle=col('--accent'); ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle=col('--bg'); ctx.stroke();
+}
 function drawCurve(){
   const c=$('#curve'); if(!c) return; const ctx=c.getContext('2d'); const W=c.width,H=c.height; const cs=getComputedStyle(document.documentElement);
   ctx.fillStyle=cs.getPropertyValue('--graphBg').trim(); ctx.fillRect(0,0,W,H);
@@ -412,7 +722,7 @@ function render(){
   const tpl=document.createElement('template');
   tpl.innerHTML = VIEW==='flyout' ? renderFlyout() : renderSettings();
   morphChildren(app, tpl.content);
-  if(VIEW!=='flyout') drawCurve();
+  if(VIEW!=='flyout'){ drawCurve(); drawWarmChart(); }
   measureAreas();
 }
 /* ---------- Wallpaper theme: measure how much of this window each colour group really covers, so the engine
@@ -437,7 +747,8 @@ function measureAreas(){
   const order=parts.map(x=>x[0]).join('>');
   if(order!==lastAreaOrder){ lastAreaOrder=order; post('uiAreas', order, parts.map(x=>x[0]+' '+Math.round(x[1]/total*100)+'%').join(', ')); }
 }
-addEventListener('resize', ()=>{ clearTimeout(measureAreas._t); measureAreas._t=setTimeout(measureAreas,150); });
+addEventListener('resize', ()=>{ clearTimeout(measureAreas._t); measureAreas._t=setTimeout(measureAreas,150); drawWarmChart(); });
+setInterval(()=>{ if(VIEW!=='flyout') drawWarmChart(); }, 30000);
 function sameNode(a,b){
   if(a.nodeType!==b.nodeType) return false;
   if(a.nodeType!==1) return true;
@@ -465,6 +776,7 @@ function morphNode(o,n){
   }
   if(o.tagName==='CANVAS') return;
   morphChildren(o,n);
+  if(o.tagName==='SELECT' && o!==document.activeElement){ const opt=n.querySelector('option[selected]'); if(opt && o.value!==opt.value) o.value=opt.value; }
 }
 /* ---------- edge resize: the web view covers the whole window, so the page detects presses near
    the edges and asks the engine to start the native sizing loop (hit-test codes HTLEFT..HTBOTTOMRIGHT) ---------- */
@@ -486,15 +798,19 @@ document.addEventListener('pointerdown', e=>{
 let dragging=false, pendingState=null;
 document.addEventListener('pointerdown', e=>{ if(e.target && e.target.type==='range') dragging=true; }, true);
 document.addEventListener('pointerup', ()=>{ if(dragging){ dragging=false; if(pendingState){ S=pendingState; pendingState=null; capturing=S.capturing||''; render(); } } }, true);
+const isEditing=a=>a && a.tagName==='INPUT' && a.type!=='range' && a.type!=='checkbox' && a.type!=='color';
+document.addEventListener('focusout', ()=>setTimeout(()=>{
+  if(pendingState && !dragging && !isEditing(document.activeElement)){ S=pendingState; pendingState=null; capturing=S.capturing||''; render(); }
+},0));
 window.chrome?.webview?.addEventListener('message', e=>{
   const d=e.data; if(!d||typeof d!=='object') return;
   if(d.type==='state'){
     const active=document.activeElement; const editing = active && active.tagName==='INPUT' && active.type!=='range' && active.type!=='checkbox' && active.type!=='color';
-    if(dragging || editing){ pendingState=d; S=d; syncLight(); return; }
+    if(dragging || editing){ pendingState=d; S=d; syncLight(); if(VIEW!=='flyout') drawWarmChart(); return; }
     S=d; capturing=d.capturing||''; render();
   }
   if(d.type==='toast') toast(d.text);
-  if(d.type==='nav'){ page=d.page; render(); }
+  if(d.type==='nav') go(d.page);
   if(d.type==='wpgeom'){ if(S&&S.wp){ S.wp.x=d.x; S.wp.y=d.y; } positionWallpaper(d.x,d.y); }
 });
 /* light sync while a text field has focus: update slider values/readouts without rebuilding */
@@ -503,6 +819,10 @@ function syncLight(){
   const set=(id,v,suf='%')=>{ const el=document.getElementById(id); if(el&&document.activeElement!==el){ el.value=v; el.dispatchEvent(new Event('sync')); const o=$('#v_'+id); if(o) o.textContent=v+suf; el.style.setProperty('--p',((v-(+el.min||0))/((+el.max||100)-(+el.min||0))*100)+'%'); } };
   set('hw',S.hw); set('sw',S.sw); set('hw2',S.hw); set('sw2',S.sw);
 }
+/* pause the ambient motion while the window is not the active one */
+addEventListener('blur', ()=>document.documentElement.classList.add('idle'));
+addEventListener('focus', ()=>document.documentElement.classList.remove('idle'));
+if(!document.hasFocus()) document.documentElement.classList.add('idle');
 post('ready');
 </script>
 </body>

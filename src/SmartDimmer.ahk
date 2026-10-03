@@ -14,19 +14,33 @@
 #SingleInstance Force
 ;@Ahk2Exe-SetName Smart Dimmer
 ;@Ahk2Exe-SetDescription Smart Dimmer - hardware backlight and software dimming for every monitor
-;@Ahk2Exe-SetVersion 1.0.0.0
+;@Ahk2Exe-SetVersion 1.1.0.0
 ;@Ahk2Exe-SetProductName Smart Dimmer
 ;@Ahk2Exe-SetCopyright Copyright (c) 2026 Munib Uddin - MIT License
 #Include lib\WebView2.ahk
 ProcessSetPriority "High"
-A_IconTip := "Smart Dimmer v1"
+A_IconTip := "Smart Dimmer 1.1"
 
-global APP_VERSION := "1"
-global iniFile := A_ScriptDir . "\SmartDimmerSettings.ini"
+global APP_VERSION := "1.1"
+; Settings, log and the extracted UI files live next to the exe when that folder is writable (portable use),
+; otherwise (e.g. Program Files) in %LOCALAPPDATA%\SmartDimmer.
+ResolveDataDir() {
+    probe := A_ScriptDir . "\.smartdimmer-write-test"
+    try {
+        FileAppend("", probe)
+        FileDelete(probe)
+        return A_ScriptDir
+    }
+    dir := EnvGet("LOCALAPPDATA") . "\SmartDimmer"
+    try DirCreate(dir)
+    return dir
+}
+global dataDir := ResolveDataDir()
+global iniFile := dataDir . "\SmartDimmerSettings.ini"
 global startupLink := A_Startup . "\SmartDimmer.lnk"
-global logFile := A_ScriptDir . "\SmartDimmerDebug.log"
-global uiHtmlPath := A_ScriptDir . "\SmartDimmerUI.html"
-global wvLoaderPath := A_ScriptDir . "\WebView2Loader.dll"
+global logFile := dataDir . "\SmartDimmerDebug.log"
+global uiHtmlPath := dataDir . "\SmartDimmerUI.html"
+global wvLoaderPath := dataDir . "\WebView2Loader.dll"
 global wvDataDir := A_Temp . "\SmartDimmerWebView"
 global wpImgDir := wvDataDir . "\wallpaper"          ; downscaled wallpaper copies served to the page as https://wallpaper.smartdimmer/
 
@@ -37,7 +51,29 @@ global fallbackBrightness := 50, externalMonitorNum := "2", linkAllDisplays := 0
 global hotkeyUpString := "^Up", hotkeyDoString := "^Down", hotkeySWUpString := "#Up", hotkeySWDoString := "#Down"
 global monitorHotkeys := Map()          ; "mIdx:kind" -> hotkey
 global monitorSplitMode := Map(), monitorHW := Map(), monitorSW := Map(), dimStates := Map()
+global warmStates := Map()               ; per screen: does the warmth filter apply (independent of the Software tick)
 global useDefaultsAtStartup := 0
+global warmth := 0                       ; colour warmth 0..100 (0 = neutral 6500 K, 100 = 1900 K), through the software (gamma) path
+global smoothTransitions := 1            ; fade software brightness and warmth changes over ~200 ms
+global memorySaver := 1                  ; shut WebView2 down a minute after both windows are closed (a few MB instead of ~250 MB)
+global MEMORY_SAVER_DELAY := 60000
+global osdEnabled := 1                      ; on-screen indicator when a brightness hotkey is used
+global WARMTH_K_NEUTRAL := 6500, WARMTH_K_WARMEST := 1900
+; Warmth schedule (f.lux style): three parts of the day, each starting at its time with its own warmth; every
+; change starts at the part's time and takes warmFadeMin minutes. Separate from the brightness schedule.
+global warmSchedEnabled := 0, warmFadeMin := 60
+global warmPhases := DefaultWarmPhases()
+global warmPausedPhase := "", warmLastKey := "", warmPreviewFrom := ""
+; Weather and time of day: an automatic theme per part of the day / kind of weather, and the Sky theme. The place is
+; chosen once by name (Open-Meteo geocoding); sunrise and sunset are computed locally from its coordinates, and only
+; the current weather is fetched (Open-Meteo, no key), every 20 minutes and only while one of the features is on.
+global AUTO_SLOTS := ["Morning", "Day", "Evening", "Night", "Cloudy", "Rain", "Snow", "Storm", "Fog"]
+global autoThemeEnabled := 0, autoWeatherScope := "always", autoThemeMap := DefaultAutoThemeMap()
+global locName := "", locLat := "", locLon := "", locResults := [], locSearching := 0
+global weatherNow := {kind: "", code: "", text: "", temp: "", at: "", tick: 0, error: ""}, weatherFetchTick := 0, envLastSig := ""
+global autoWeatherStrength := 45                  ; % of the weather theme mixed into the time-of-day theme
+global manualTheme := "Lava Orange"               ; the theme to go back to when the automatic theme is turned off
+global autoLastSig := "", autoLastLabel := ""
 global lastKnownMonitorCount := MonitorGetCount()
 global capturing := ""                  ; "master:HWUp" / "mon:2:SWUp" while a hotkey capture is running
 
@@ -48,15 +84,18 @@ global schedRows := DefaultScheduleRows()
 global schedPausedIdx := 0, schedLastApplied := ""
 
 ; ---- themes ----
-global THEME_ORDER := ["Lava Orange", "Aqua Blue", "Emerald Green", "Lavender Pink", "Milky Way", "Wallpaper", "Custom"]
+global THEME_ORDER := ["Lava Orange", "Aqua Blue", "Emerald Green", "Lavender Pink", "Milky Way",
+                       "Amber Night", "Synthwave", "Tokyo Night", "Nord Frost", "Graphite", "Cyber Neon", "Northern Lights", "Wallpaper", "Sky", "Custom"]
 global COLOR_SLOTS := [
     ["bg", "Window background"], ["input", "Panels, cards, title bar"], ["line", "Separators and borders"],
     ["text", "Text"], ["muted", "Secondary text"], ["accent", "Accent (titles, readouts, curve)"],
+    ["accent2", "Second accent (gradients and glow)"],
     ["btnFace", "Button face"], ["btnText", "Button text"], ["checkOn", "Switches and checkboxes (on)"],
     ["sliderTrack", "Slider track"], ["sliderFill", "Slider filled part"], ["sliderThumb", "Slider thumb"],
     ["graphBg", "Curve preview background"], ["grid", "Curve preview grid"]]
-MakeTheme(bg, text, muted, accent, line, input, graphBg, grid) {
-    return {bg: bg, text: text, muted: muted, accent: accent, line: line, input: input, graphBg: graphBg, grid: grid,
+; accent2 is the second hue each theme blends into (gradients, ambient glow); it defaults to the accent itself
+MakeTheme(bg, text, muted, accent, line, input, graphBg, grid, accent2 := "") {
+    return {bg: bg, text: text, muted: muted, accent: accent, accent2: (accent2 != "" ? accent2 : accent), line: line, input: input, graphBg: graphBg, grid: grid,
             btnFace: input, btnText: text, checkOn: accent, sliderTrack: line, sliderFill: accent, sliderThumb: accent}
 }
 CloneTheme(t) {
@@ -66,22 +105,37 @@ CloneTheme(t) {
         c.%slot[1]% := t.%slot[1]%
     return c
 }
-; Palettes (bg, text, muted, accent, line, panel, graphBg, grid): deep neutral bases with one vivid accent each.
+; Palettes (bg, text, muted, accent, line, panel, graphBg, grid, second accent): deep bases, each with an accent
+; that blends into a neighbouring second hue.
 global THEMES := Map(
-    "Lava Orange",   MakeTheme("141417", "F5F5F7", "9A9AA6", "FF8A3D", "2A2A32", "1F1F25", "1A1A1F", "55555F"),
-    "Aqua Blue",     MakeTheme("0A131B", "EAF4FA", "88A9BB", "38BDF8", "1A2D3B", "11202D", "0E1A24", "31536A"),
-    "Emerald Green", MakeTheme("0A1510", "E9F6EE", "86B398", "34D399", "173124", "10211A", "0D1B15", "2E5A45"),
-    "Lavender Pink", MakeTheme("16111D", "F6EEF9", "AE97C2", "EC7FD6", "2D2238", "20182D", "1A1425", "56447A"),
-    "Milky Way",     MakeTheme("090B14", "EEF0FA", "9AA3CC", "A5B4FC", "1E2238", "13172C", "0F1226", "3A4170"),
-    "Wallpaper",     MakeTheme("141417", "F5F5F7", "9A9AA6", "FF8A3D", "2A2A32", "1F1F25", "1A1A1F", "55555F"),   ; placeholder: computed per screen (see WALLPAPER THEME)
-    "Custom",        MakeTheme("141417", "F5F5F7", "9A9AA6", "FF8A3D", "2A2A32", "1F1F25", "1A1A1F", "55555F"))
+    "Lava Orange",   MakeTheme("141417", "F5F5F7", "9A9AA6", "FF8A3D", "2A2A32", "1F1F25", "1A1A1F", "55555F", "FF4D6D"),
+    "Aqua Blue",     MakeTheme("0A131B", "EAF4FA", "88A9BB", "38BDF8", "1A2D3B", "11202D", "0E1A24", "31536A", "818CF8"),
+    "Emerald Green", MakeTheme("0A1510", "E9F6EE", "86B398", "34D399", "173124", "10211A", "0D1B15", "2E5A45", "A3E635"),
+    "Lavender Pink", MakeTheme("16111D", "F6EEF9", "AE97C2", "EC7FD6", "2D2238", "20182D", "1A1425", "56447A", "A78BFA"),
+    ; night-sky blue with the galaxy's warm core (pale gold) blending into nebula violet
+    "Milky Way",     MakeTheme("070A16", "EEF0FA", "98A0C8", "F5C572", "1D2340", "11162C", "0C1024", "39406E", "B98AF7"),
+    ; warm amber into red with no blue in it: easy on the eyes at night
+    "Amber Night",   MakeTheme("150D06", "FFF1E0", "C4A07E", "FFA41B", "33220F", "22170C", "1C130A", "6B4A26", "FF5A36"),
+    "Synthwave",     MakeTheme("170C24", "F7EEFF", "B39AD0", "FF2E88", "33204A", "221434", "1C1030", "5A3F7E", "FFB547"),
+    "Tokyo Night",   MakeTheme("16161E", "E6E8F7", "9AA0C3", "7AA2F7", "2A2C3D", "1E2030", "1A1B26", "414868", "BB9AF7"),
+    "Nord Frost",    MakeTheme("1B222C", "ECEFF4", "9AA7B8", "88C0D0", "313B4A", "242D3A", "1F2733", "4C566A", "B48EAD"),
+    "Graphite",      MakeTheme("121315", "EDEDEF", "9C9DA3", "E4E4E7", "2A2B2F", "1C1D20", "18191B", "4B4C52", "A1A1AA"),
+    "Cyber Neon",    MakeTheme("0B0B12", "F2F2FF", "9A9AB8", "00E5FF", "23233A", "15152A", "11111F", "3A3A66", "F5F500"),
+    ; a polar night sky lit by the aurora: luminous green into violet over deep blue-teal (the page adds moving
+    ; aurora curtains and faint stars behind it when lively effects are on)
+    "Northern Lights", MakeTheme("030912", "ECFFF8", "93D3C8", "2BFFA3", "123848", "071628", "05101E", "1E6475", "C25BFF"),
+    "Wallpaper",     MakeTheme("141417", "F5F5F7", "9A9AA6", "FF8A3D", "2A2A32", "1F1F25", "1A1A1F", "55555F", "FF4D6D"),   ; placeholder: computed per screen (see WALLPAPER THEME)
+    "Sky",           MakeTheme("0B1624", "EAF1F8", "8FA6BC", "3FB2F5", "20344A", "13233A", "0E1B2C", "3A5773", "4FD1C0"),   ; placeholder: computed from the sun and the weather (see SKY)
+    "Custom",        MakeTheme("141417", "F5F5F7", "9A9AA6", "FF8A3D", "2A2A32", "1F1F25", "1A1A1F", "55555F", "FF4D6D"),
+    "Automatic",     MakeTheme("141417", "F5F5F7", "9A9AA6", "FF8A3D", "2A2A32", "1F1F25", "1A1A1F", "55555F", "FF4D6D"))   ; computed: blend by time of day and weather (not a tile)
 global themeName := "Lava Orange"
-; the built-in palettes, kept for "reset to original" (every theme except Wallpaper can be edited by the user)
+; the built-in palettes, kept for "reset to original" (every theme except Wallpaper and Sky can be edited by the user)
 global THEME_DEFAULTS := Map()
 for _name in THEME_ORDER
     THEME_DEFAULTS[_name] := CloneTheme(THEMES[_name])
 ; ---- glass (transparent, blur-behind windows) ----
 global glassEnabled := 0, glassOpacity := 65      ; opacity of the page tint over the blurred desktop, 20..95 %
+global livelyEffects := 1                         ; ambient glows and two-tone gradients from each theme's two accents
 global GLASS_RADIUS := 14                         ; px corner radius of the windows in glass mode (the page uses the same value)
 global wpIntensity := 70                          ; Wallpaper theme: how strongly the picture's colours are pushed into the UI (25..100)
 global wpFrost := 0                               ; Wallpaper theme + glass: draw a frosted copy of the wallpaper behind the window (instead of the live blur only)
@@ -94,6 +148,11 @@ global consoleDisplayOn := true, powerNotifyHandle := 0                  ; Windo
 ; ---- windows ----
 global flyout := "", settings := ""     ; host window objects (see CreateHostWindow)
 global wvEnv := ""                      ; shared WebView2 environment
+; Both windows share one page process (site isolation only matters for web content; these are the app's own
+; local pages), no spare process kept warm, no background networking (the pages load nothing from the internet),
+; and Edge extras a settings page does not need are off.
+global WV_BROWSER_ARGS := "--disable-site-isolation-trials --process-per-site --renderer-process-limit=1 --disable-background-networking --disable-component-update"
+    . " --disable-features=SpareRendererForSitePerProcess,Translate,msEdgeTranslate,AutofillServerCommunication,msSmartScreenProtection,OptimizationHints,MediaRouter,msWebOOUI,msPdfOOUI"
 global framelessHwnds := Map()          ; hwnd -> {minW, minH}
 global WV_INSET := 0                    ; the web view covers the whole client area; the page starts edge resizes itself ("resize" command)
 
@@ -101,10 +160,31 @@ if FileExist(logFile)
     try FileDelete(logFile)
 LogAction(message) {
     global logFile
+    static writes := 0
     try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") . " - " . message . "`n", logFile)
     OutputDebug("SmartDimmer: " . message . "`n")
+    ; keep the log bounded in long sessions: past 2 MB it is moved to .old and a new one is started
+    if (Mod(++writes, 500) == 0)
+        try {
+            if (FileGetSize(logFile) > 2 * 1024 * 1024)
+                FileMove(logFile, logFile . ".old", 1)
+        }
 }
-LogAction("Initializing Smart Dimmer v" . APP_VERSION)
+ErrText(e) => Type(e) . ": " . e.Message . (e.Extra != "" ? " [" . e.Extra . "]" : "") . " (in " . e.What . ", line " . e.Line . ")"
+
+; Any error nobody caught ends up here: it is logged with its call stack and the thread that raised it
+; stops, but the app keeps running instead of showing AutoHotkey's error dialog and aborting.
+OnError(OnUnexpectedError)
+OnUnexpectedError(e, mode) {
+    static notified := false
+    LogAction("[Error] " . ErrText(e) . " | stack: " . StrReplace(Trim(e.Stack, "`r`n"), "`n", " <- "))
+    if (!notified) {
+        notified := true
+        try TrayTip("Smart Dimmer recovered from an unexpected error. Details are in SmartDimmerDebug.log.", "Smart Dimmer", "Iconi Mute")
+    }
+    return -1
+}
+LogAction("Initializing Smart Dimmer v" . APP_VERSION . " (data folder: " . dataDir . ", uptime " . (A_TickCount // 1000) . " s, args: " . (A_Args.Length ? Join(A_Args, " ") : "none") . ")")
 
 global currentHardwareBright := IniRead(iniFile, "Settings", "LastHardwareBright", fallbackBrightness)
 global currentSoftwareDim := IniRead(iniFile, "Settings", "LastSoftwareDim", fallbackBrightness)
@@ -120,24 +200,51 @@ UpdateActiveHotkeys()
 ; 🌐 WEBVIEW2 HOST WINDOWS
 ; =========================================================================
 EnsureUiFiles() {
-    global wvLoaderPath, uiHtmlPath
-    ; Compiled: extract the embedded files next to the exe. Uncompiled: copies onto themselves fail
-    ; harmlessly. NOTE: each FileInstall must start its own line - Ahk2Exe only embeds files for
-    ; calls written that way (a "try FileInstall(...)" one-liner is silently NOT embedded).
+    global wvLoaderPath, uiHtmlPath, dataDir
+    ; Compiled: extract the embedded files into the data folder. Uncompiled (data folder = script folder):
+    ; the files are already there; point at the sources if the data folder is elsewhere.
+    ; NOTE: each FileInstall must start its own line - Ahk2Exe only embeds files for calls written that way
+    ; (a "try FileInstall(...)" one-liner is silently NOT embedded).
     try {
-        FileInstall("lib\WebView2Loader.dll", A_ScriptDir . "\WebView2Loader.dll", 1)
+        FileInstall("lib\WebView2Loader.dll", dataDir . "\WebView2Loader.dll", 1)
     }
     try {
-        FileInstall("SmartDimmerUI.html", A_ScriptDir . "\SmartDimmerUI.html", 1)
+        FileInstall("SmartDimmerUI.html", dataDir . "\SmartDimmerUI.html", 1)
+    }
+    if (!A_IsCompiled) {
+        if !FileExist(wvLoaderPath)
+            wvLoaderPath := A_ScriptDir . "\lib\WebView2Loader.dll"
+        if !FileExist(uiHtmlPath)
+            uiHtmlPath := A_ScriptDir . "\SmartDimmerUI.html"
     }
     ok := FileExist(wvLoaderPath) && FileExist(uiHtmlPath)
-    LogAction("[UI] files ready=" . (ok ? 1 : 0) . " (" . A_ScriptDir . ")")
+    LogAction("[UI] files ready=" . (ok ? 1 : 0) . " (" . dataDir . ")")
     return ok
+}
+
+; Waits for a WebView2 promise. Marks it as observed first: otherwise a promise that fails AFTER the wait
+; timed out throws its error from a timer thread later, with nobody left to catch it.
+; Waits for a WebView2 promise with a real deadline. (The bundled Promise.await shrinks its remaining time by the
+; total elapsed time on every pass of its message loop, so while messages keep arriving a 45 s allowance ran out
+; after about a second: a WebView2 start that took 2 s failed with "TimeoutError".) Sleep keeps messages and the
+; WebView2 completion callbacks flowing while waiting. Marking the promise as observed stops a late rejection from
+; being raised from a timer thread.
+AwaitQuietly(p, timeoutMs) {
+    p.thrown := true
+    deadline := A_TickCount + timeoutMs
+    while !ObjHasOwnProp(p, "status") {
+        if (A_TickCount > deadline)
+            throw TimeoutError("WebView2 did not answer within " . Round(timeoutMs / 1000) . " s")
+        Sleep(15)
+    }
+    if (p.status == "fulfilled")
+        return p.result
+    throw p.result
 }
 
 ; Creates a frameless host window with a WebView2 showing the UI page for `view` ("flyout"|"settings").
 CreateHostWindow(view, minW, minH) {
-    global wvEnv, framelessHwnds, wvDataDir, wvLoaderPath, THEMES, themeName, GLASS_RADIUS, wpImgDir
+    global wvEnv, framelessHwnds, wvDataDir, wvLoaderPath, THEMES, themeName, GLASS_RADIUS, wpImgDir, WV_BROWSER_ARGS
     LogAction("[UI] creating " . view . " window")
     ; (local is named 'win', not 'gui': a local called gui would shadow the Gui class)
     win := Gui("-Caption -MinimizeBox +Resize" . (view == "flyout" ? " +ToolWindow" : " -MaximizeBox"), "Smart Dimmer" . (view == "settings" ? "  -  Settings" : ""))
@@ -145,12 +252,41 @@ CreateHostWindow(view, minW, minH) {
     framelessHwnds[win.Hwnd] := {minW: minW, minH: minH}
     ApplyFramelessNow(win.Hwnd)
     ApplyGlass(win.Hwnd, win)
-    if (wvEnv == "") {
-        DirCreate(wvDataDir)
-        wvEnv := WebView2.CreateEnvironmentAsync(0, wvDataDir, , wvLoaderPath).await(20000)
-        LogAction("[UI] WebView2 runtime " . wvEnv.BrowserVersionString)
+    host := {view: view, gui: win, hwnd: win.Hwnd, ctl: "", core: "", token: "", ready: false, loaded: false, asleep: false,
+             wpTheme: "", wpMon: 0, wpPath: "", areaOrder: "", pendingNav: ""}
+    host.sleepTimer := DeepSleepHost.Bind(host)
+    host.unloadTimer := UnloadWebView.Bind(host)
+    host.geomTimer := PushWallpaperGeometry.Bind(host)
+    host.glassTimer := ReapplyGlassForHost.Bind(host)
+    win.OnEvent("Size", OnHostSize.Bind(host))
+    win.OnEvent("Close", (*) => HideHost(host))
+    try {
+        AttachWebView(host)
+    } catch as e {
+        ; leave nothing half-made behind: the caller retries from scratch
+        framelessHwnds.Delete(win.Hwnd)
+        try win.Destroy()
+        throw e
     }
-    ctl := wvEnv.CreateCoreWebView2ControllerAsync(win.Hwnd).await(20000)
+    return host
+}
+
+; Creates the web view inside a host window and loads the page. Done at startup, and again when a window is opened
+; after its web view was shut down to save memory (see UnloadWebView).
+AttachWebView(host) {
+    global wvEnv, wvDataDir, wvLoaderPath, GLASS_RADIUS, wpImgDir, WV_BROWSER_ARGS, uiHtmlPath
+    view := host.view
+    try {
+        if (wvEnv == "") {
+            DirCreate(wvDataDir)
+            wvEnv := AwaitQuietly(WebView2.CreateEnvironmentAsync({AdditionalBrowserArguments: WV_BROWSER_ARGS}, wvDataDir, , wvLoaderPath), 45000)
+            LogAction("[UI] WebView2 runtime " . wvEnv.BrowserVersionString)
+        }
+        ctl := AwaitQuietly(wvEnv.CreateCoreWebView2ControllerAsync(host.hwnd), 45000)
+    } catch as e {
+        wvEnv := ""
+        throw e
+    }
     ctl.IsVisible := true            ; a controller created on a hidden window starts invisible
     ; Transparent web view background (ICoreWebView2Controller2::put_DefaultBackgroundColor, A=0):
     ; the page paints its own background, opaque or translucent depending on the glass option.
@@ -175,7 +311,7 @@ CreateHostWindow(view, minW, minH) {
         ComCall(31, ctl3, "int", 0)                         ; put_ShouldDetectMonitorScaleChanges(false)
         ComCall(29, ctl3, "double", A_ScreenDPI / 96)       ; put_RasterizationScale
     }
-    core.AddScriptToExecuteOnDocumentCreatedAsync("window.SD_VIEW='" . view . "'; window.SD_NATIVE_DRAG=" . nativeDrag . "; window.SD_RADIUS=" . GLASS_RADIUS . ";").await(5000)
+    AwaitQuietly(core.AddScriptToExecuteOnDocumentCreatedAsync("window.SD_VIEW='" . view . "'; window.SD_NATIVE_DRAG=" . nativeDrag . "; window.SD_RADIUS=" . GLASS_RADIUS . ";"), 10000)
     ; the page can load downscaled wallpaper copies (glass + Wallpaper theme) from this folder
     try {
         DirCreate(wpImgDir)
@@ -183,15 +319,13 @@ CreateHostWindow(view, minW, minH) {
     } catch as e {
         LogAction("[UI] wallpaper folder mapping failed: " . e.Message)
     }
-    host := {view: view, gui: win, hwnd: win.Hwnd, ctl: ctl, core: core, ready: false, wpTheme: "", wpMon: 0, wpPath: "", areaOrder: ""}
-    host.geomTimer := PushWallpaperGeometry.Bind(host)
-    host.glassTimer := ReapplyGlassForHost.Bind(host)
+    host.ctl := ctl, host.core := core, host.ready := false, host.loaded := true, host.asleep := false
     host.token := core.WebMessageReceived(OnPageMessage.Bind(host))
-    win.OnEvent("Size", OnHostSize.Bind(host))
-    win.OnEvent("Close", (*) => HideHost(host))
+    rc := Buffer(16, 0)                                          ; (works while the window is hidden, unlike WinGetClientPos)
+    DllCall("GetClientRect", "Ptr", host.hwnd, "Ptr", rc)
+    FitWebView(host, NumGet(rc, 8, "Int"), NumGet(rc, 12, "Int"))
     core.NavigateToString(FileRead(uiHtmlPath, "UTF-8"))
     LogAction("[UI] " . view . " page loading")
-    return host
 }
 
 OnHostSize(host, guiObj, minMax, w, h) {
@@ -219,9 +353,9 @@ SaveHostSize(host, w, h) {
     global iniFile
     if (host.view == "flyout") {
         suffix := GetFlyoutSizeKeySuffix()
-        IniWrite(w, iniFile, "Position", "W" . suffix), IniWrite(h, iniFile, "Position", "H" . suffix)
+        try IniWrite(w, iniFile, "Position", "W" . suffix), IniWrite(h, iniFile, "Position", "H" . suffix)
     } else {
-        IniWrite(w, iniFile, "Position", "SettingsW"), IniWrite(h, iniFile, "Position", "SettingsH")
+        try IniWrite(w, iniFile, "Position", "SettingsW"), IniWrite(h, iniFile, "Position", "SettingsH")
     }
 }
 
@@ -237,7 +371,7 @@ OnPageMessage(host, sender, args) {
 PushState(host := "") {
     global flyout, settings
     for h in (host != "" ? [host] : [flyout, settings]) {
-        if (h == "" || !h.ready)
+        if (h == "" || !h.ready || h.asleep)                     ; a hidden window gets the state when it is shown again
             continue
         try h.core.PostWebMessageAsJson(Jsn(BuildState(h)))     ; per host: the Wallpaper palette depends on the host's screen
     }
@@ -246,7 +380,7 @@ PushState(host := "") {
 Toast(text, host := "") {
     global flyout, settings
     for h in (host != "" ? [host] : [flyout, settings]) {
-        if (h == "" || !h.ready)
+        if (h == "" || !h.ready || h.asleep)
             continue
         try h.core.PostWebMessageAsJson('{"type":"toast","text":' . JsnStr(text) . '}')
     }
@@ -391,7 +525,7 @@ WallpaperLayerState(host) {
     if (host == "" || !glassEnabled || !wpFrost || themeName != "Wallpaper")
         return {img: "", sw: 0, sh: 0, x: 0, y: 0}
     pal := WallpaperThemeForHost(host)
-    idx := host.wpMon ? host.wpMon : HostMonitorIndex(host)
+    idx := (host.wpMon && host.wpMon <= MonitorGetCount()) ? host.wpMon : HostMonitorIndex(host)
     MonitorGet(idx, &mL, &mT, &mR, &mB)            ; (not L/T: variable names are case-insensitive, T would clobber a theme variable t)
     x := 0, y := 0
     try WinGetPos(&x, &y, , , "ahk_id " . host.hwnd)
@@ -440,18 +574,19 @@ Join(arr, sep) {
 ; The whole UI state in one object.
 BuildState(host := "") {
     global APP_VERSION, currentHardwareBright, currentSoftwareDim, linkHardwareSoftware, linkAllDisplays, externalMonitorNum
-    global monitorSplitMode, monitorHW, monitorSW, dimStates, dimmingCurve, invertCurve, exponentialFactor, maxSoftwareDarkness, hardwareStep
+    global monitorSplitMode, monitorHW, monitorSW, dimStates, dimmingCurve, invertCurve, exponentialFactor, maxSoftwareDarkness, hardwareStep, warmStates
     global hotkeyUpString, hotkeyDoString, hotkeySWUpString, hotkeySWDoString, monitorHotkeys, capturing, hotkeyFlipString
-    global THEME_ORDER, THEMES, themeName, COLOR_SLOTS, useDefaultsAtStartup, startupLink, glassEnabled, glassOpacity, wpIntensity, wpFrost
-    global schedEnabled, schedFade, schedIncludeIndependent, schedRows
+    global THEME_ORDER, THEMES, themeName, COLOR_SLOTS, useDefaultsAtStartup, startupLink, glassEnabled, glassOpacity, wpIntensity, wpFrost, livelyEffects
+    global schedEnabled, schedFade, schedIncludeIndependent, schedRows, dataDir, warmth, smoothTransitions, osdEnabled, memorySaver
     mons := []
     names := MonitorNamesByIndex()
     Loop MonitorGetCount() {
         n := A_Index
         mons.Push({idx: n, name: names.Has(n) ? names[n] : "Display " . n, split: (monitorSplitMode.Has(n) && monitorSplitMode[n] == 1) ? 1 : 0,
+                   backlight: IsBacklightTarget(n), primary: (n == MonitorGetPrimary()) ? 1 : 0,
                    hw: monitorHW.Has(n) ? monitorHW[n] : currentHardwareBright,
                    sw: monitorSW.Has(n) ? monitorSW[n] : currentSoftwareDim,
-                   dim: dimStates.Has(n) ? dimStates[n] : 1})
+                   dim: dimStates.Has(n) ? dimStates[n] : 1, warm: IsWarmTarget(n)})
     }
     monHK := Map()
     Loop MonitorGetCount() {
@@ -463,6 +598,8 @@ BuildState(host := "") {
     themeMap := Map()               ; (not 'themes': variable names are case-insensitive and would clobber THEMES)
     for name in THEME_ORDER
         themeMap[name] := (name == "Wallpaper") ? WallpaperThemeForTile(host) : THEMES[name]
+    if (themeName == "Automatic")
+        themeMap["Automatic"] := THEMES["Automatic"]
     lines := ScheduleStatusLines()
     rows := []
     for r in schedRows
@@ -474,8 +611,10 @@ BuildState(host := "") {
         hotkeys: {master: {HWUp: hotkeyUpString, HWDown: hotkeyDoString, SWUp: hotkeySWUpString, SWDown: hotkeySWDoString, Flip: hotkeyFlipString}, monitors: monHK},
         capturing: capturing, primary: PrimaryDisplayState(),
         theme: themeName, themeOrder: THEME_ORDER, themes: themeMap, colorSlots: COLOR_SLOTS,
-        glass: glassEnabled, glassOpacity: glassOpacity, wp: WallpaperLayerState(host), wpIntensity: wpIntensity, wpFrost: wpFrost,
-        startup: FileExist(startupLink) ? 1 : 0, useDefaults: useDefaultsAtStartup,
+        glass: glassEnabled, glassOpacity: glassOpacity, wp: WallpaperLayerState(host), wpIntensity: wpIntensity, wpFrost: wpFrost, lively: livelyEffects,
+        warmth: warmth, warmthK: WarmthToKelvin(warmth), nightLight: WindowsNightLightOn(), smooth: smoothTransitions, osd: osdEnabled,
+        warmSched: WarmScheduleState(), env: EnvState(), memSaver: memorySaver,
+        startup: FileExist(startupLink) ? 1 : 0, useDefaults: useDefaultsAtStartup, dataDir: dataDir,
         sched: {enabled: schedEnabled, fade: schedFade, includeIndependent: schedIncludeIndependent, rows: rows, status1: lines[1], status2: lines[2]}}
 }
 
@@ -483,7 +622,8 @@ BuildState(host := "") {
 HandleCommand(host, msg) {
     global currentHardwareBright, currentSoftwareDim, linkHardwareSoftware, linkAllDisplays, externalMonitorNum
     global monitorSplitMode, monitorHW, monitorSW, dimStates, dimmingCurve, invertCurve, exponentialFactor, maxSoftwareDarkness, hardwareStep
-    global useDefaultsAtStartup, themeName, THEMES, schedRows, glassEnabled, glassOpacity, wpIntensity, wpFrost
+    global useDefaultsAtStartup, themeName, THEMES, schedRows, glassEnabled, glassOpacity, wpIntensity, wpFrost, settings, dataDir, livelyEffects
+    global warmth, smoothTransitions, osdEnabled, warmStates, autoThemeEnabled, manualTheme, memorySaver, flyout
     p := StrSplit(msg, "|")
     cmd := p[1]
     a := (p.Length >= 2) ? p[2] : "", b := (p.Length >= 3) ? p[3] : "", c := (p.Length >= 4) ? p[4] : "", d := (p.Length >= 5) ? p[5] : "", e := (p.Length >= 6) ? p[6] : ""
@@ -491,6 +631,11 @@ HandleCommand(host, msg) {
         case "ready":
             host.ready := true
             PushState(host)
+            if (host.pendingNav != "")
+                try host.core.PostWebMessageAsJson('{"type":"nav","page":' . JsnStr(host.pendingNav) . '}')
+            host.pendingNav := ""
+            if !IsHostVisible(host)
+                SetTimer(SetHostAsleep.Bind(host), -1500)            ; windows are created hidden at startup
         case "drag":
             DllCall("ReleaseCapture")
             PostMessage(0xA1, 2, 0, , "ahk_id " . host.hwnd)          ; WM_NCLBUTTONDOWN, HTCAPTION
@@ -511,19 +656,54 @@ HandleCommand(host, msg) {
             HideHost(host)
         case "openSettings":
             ShowSettingsWindow()
+            if (a != "" && settings != "") {          ; open straight at a page, e.g. from the flyout's schedule card
+                if (settings.ready) {
+                    try settings.core.PostWebMessageAsJson('{"type":"nav","page":' . JsnStr(a) . '}')
+                } else {
+                    settings.pendingNav := a            ; the page is starting up: sent once it is ready
+                }
+            }
+        case "setBacklight":
+            ; a = display number, b = 1/0: whether the shared backlight level is sent to that display
+            SetBacklightTarget(Integer(a), Integer(b))
+            SaveSettings(), UpdateDisplayState(), PushState()
+        case "openDataFolder":
+            try Run(dataDir)
+        case "openProject":
+            try Run("https://github.com/Xyberg-001/SmartDimmer")
+        case "hideFlyout":
+            CloseDashboard()
         case "identify":
             IdentifyConnectedMonitors()
         case "setHW":
             SetMasterHW(Clamp(a))
         case "setSW":
             SetMasterSW(Clamp(a))
+        case "setWarmth":
+            ; by hand: pauses the warmth schedule (not the brightness one) until the next part of the day
+            warmth := Clamp(a), NoteWarmManual()
+            SetTimer(ApplyWarmthChange, -60)
+        case "warmSched":
+            HandleWarmSchedCommand(a, b, c)
+        case "setSmooth":
+            smoothTransitions := Integer(a) ? 1 : 0, SaveSettings(), PushState()
+        case "setMemSaver":
+            memorySaver := Integer(a) ? 1 : 0, SaveSettings(), PushState()
+            for h in [flyout, settings]
+                if (h != "" && !IsHostVisible(h))
+                    ScheduleUnload(h)
+        case "setOsd":
+            osdEnabled := Integer(a) ? 1 : 0, SaveSettings(), PushState()
+            if (osdEnabled)
+                ShowOsd("Backlight", currentHardwareBright)          ; a preview on the screen under the mouse
         case "setMonHW":
             monitorHW[Integer(a)] := Clamp(b), ScheduleApply()
         case "setMonSW":
             monitorSW[Integer(a)] := Clamp(b), ScheduleApply()
-        case "toggleSplit":
+        case "toggleSplit", "setSplit":
+            ; toggleSplit|n flips; setSplit|n|0/1 sets ("Own sliders" switch)
             n := Integer(a)
-            monitorSplitMode[n] := (monitorSplitMode.Has(n) && monitorSplitMode[n] == 1) ? 0 : 1
+            monitorSplitMode[n] := (cmd == "setSplit") ? (Integer(b) ? 1 : 0) : ((monitorSplitMode.Has(n) && monitorSplitMode[n] == 1) ? 0 : 1)
             if (monitorSplitMode[n] == 1) {
                 if (!monitorHW.Has(n))
                     monitorHW[n] := currentHardwareBright
@@ -531,9 +711,13 @@ HandleCommand(host, msg) {
                     monitorSW[n] := currentSoftwareDim
             }
             UpdateDisplayState(), SaveSettings(), PushState()
+        case "setWarm":
+            ; a = display number, b = 1/0: whether the warmth filter applies to that display
+            warmStates[Integer(a)] := Integer(b) ? 1 : 0
+            UpdateDisplayState(true), SaveSettings(), PushState()
         case "setDim":
             dimStates[Integer(a)] := Integer(b) ? 1 : 0
-            UpdateDisplayState(), SaveSettings(), PushState()
+            UpdateDisplayState(true), SaveSettings(), PushState()
         case "setTargets":
             externalMonitorNum := Trim(a)
             SaveSettings(), UpdateDisplayState(), PushState()
@@ -563,7 +747,15 @@ HandleCommand(host, msg) {
         case "capture":
             StartHotkeyCapture(p)
         case "setTheme":
+            if (autoThemeEnabled) {                          ; picking a theme by hand ends the automatic choice
+                autoThemeEnabled := 0
+                SyncEnvWatch()
+                Toast("Automatic theme turned off: you picked " . a . ".")
+            }
+            manualTheme := a
             SelectTheme(a)
+        case "env":
+            HandleEnvCommand(a, b, c)
         case "setGlass":
             glassEnabled := Integer(a) ? 1 : 0
             SaveSettings(), ApplyThemeToHosts(), PushState()
@@ -581,6 +773,9 @@ HandleCommand(host, msg) {
         case "setWpIntensity":
             wpIntensity := Max(25, Min(100, Integer(a)))
             ApplyThemeToHosts(), SetTimer(SaveSettings, -300), PushState()
+        case "setLively":
+            livelyEffects := Integer(a) ? 1 : 0
+            SaveSettings(), PushState()
         case "setWpFrost":
             wpFrost := Integer(a) ? 1 : 0
             SaveSettings(), PushState()
@@ -600,8 +795,10 @@ HandleCommand(host, msg) {
             ; edit there copies the current palette into Custom, applies the colour and switches to Custom.
             if RegExMatch(b, "^[0-9A-Fa-f]{6}$") {
                 target := themeName
-                if (themeName == "Wallpaper") {
-                    THEMES["Custom"] := CloneTheme(WallpaperThemeForHost(host))
+                if (themeName == "Wallpaper" || themeName == "Sky" || themeName == "Automatic") {
+                    if (themeName == "Automatic")                      ; editing the blend ends the automatic mode
+                        autoThemeEnabled := 0, SyncEnvWatch()
+                    THEMES["Custom"] := CloneTheme(themeName == "Wallpaper" ? WallpaperThemeForHost(host) : THEMES[themeName])
                     target := "Custom"
                 }
                 THEMES[target].%a% := StrUpper(b)
@@ -609,13 +806,15 @@ HandleCommand(host, msg) {
                 SelectTheme(target)
             }
         case "resetTheme":
-            if (themeName != "Wallpaper") {
+            if (themeName != "Wallpaper" && themeName != "Sky" && themeName != "Automatic") {
                 ResetTheme(themeName)
                 SelectTheme(themeName)
                 Toast(themeName . " is back to its original colours.")
             }
         case "copyPreset":
             src := (themeName == "Custom") ? "Lava Orange" : themeName
+            if (src == "Automatic")
+                autoThemeEnabled := 0, SyncEnvWatch()
             THEMES["Custom"] := CloneTheme(src == "Wallpaper" ? WallpaperThemeForHost(host) : THEMES[src])
             SaveThemeColours("Custom")
             SelectTheme("Custom")
@@ -647,6 +846,34 @@ HandleCommand(host, msg) {
 
 Clamp(v) => Max(0, Min(100, Integer(v)))
 
+; The shared backlight level goes to the displays listed in externalMonitorNum ("targets", e.g. "1,2");
+; the UI shows that list as a "Backlight" checkbox on each display.
+IsBacklightTarget(n) {
+    global externalMonitorNum, linkAllDisplays
+    if (linkAllDisplays)
+        return 1
+    for id in StrSplit(StrReplace(externalMonitorNum, " "), ",")
+        if (IsNumber(id) && Integer(id) == n)
+            return 1
+    return 0
+}
+; Warmth has its own per-screen tick (default on), separate from the Software brightness tick.
+IsWarmTarget(n) {
+    global warmStates
+    return (!warmStates.Has(n) || warmStates[n] == 1) ? 1 : 0
+}
+SetBacklightTarget(n, on) {
+    global externalMonitorNum, linkAllDisplays
+    list := []
+    Loop Max(MonitorGetCount(), n) {
+        i := A_Index
+        if ((i == n) ? on : IsBacklightTarget(i))
+            list.Push(i)
+    }
+    linkAllDisplays := 0
+    externalMonitorNum := Join(list, ",")
+}
+
 SetMasterHW(v) {
     global currentHardwareBright, currentSoftwareDim, linkHardwareSoftware
     old := currentHardwareBright
@@ -664,10 +891,25 @@ SetMasterSW(v) {
     ScheduleApply()
 }
 
+; The Startup shortcut passes /startup so the app knows to wait for the desktop before opening WebView2.
+StartupShortcutArgs() => A_IsCompiled ? "/startup" : "`"" . A_ScriptFullPath . "`" /startup"
+StartupShortcutTarget() => A_IsCompiled ? A_ScriptFullPath : A_AhkPath
+UpdateStartupShortcut() {
+    global startupLink
+    if !FileExist(startupLink)
+        return
+    try {
+        FileGetShortcut(startupLink, &target, , &args)
+        if (target = StartupShortcutTarget() && !InStr(args, "/startup")) {
+            FileCreateShortcut(StartupShortcutTarget(), startupLink, A_ScriptDir, StartupShortcutArgs(), "Smart Dimmer")
+            LogAction("[Startup] shortcut updated to pass /startup")
+        }
+    }
+}
 SetStartup(on) {
     global startupLink
     if (on) {
-        try FileCreateShortcut(A_ScriptFullPath, startupLink, A_ScriptDir)
+        try FileCreateShortcut(StartupShortcutTarget(), startupLink, A_ScriptDir, StartupShortcutArgs(), "Smart Dimmer")
         catch
             Toast("Could not create the Startup shortcut.")
     } else {
@@ -685,6 +927,9 @@ SetStartup(on) {
 ScheduleApply() {
     NoteManualAdjust()
     SetTimer(ApplyPendingChanges, -120)
+}
+ApplyWarmthChange() {
+    UpdateDisplayState(true), SetTimer(SaveSettings, -500), PushState()
 }
 ApplyPendingChanges() {
     UpdateDisplayState(), SaveSettings(), PushState()
@@ -706,6 +951,9 @@ RequestDisplayUpdate() {
 ; ---- show / hide ----
 ShowHostAt(host, x, y, w, h) {
     global themeName
+    if !EnsureHostLoaded(host)
+        return
+    SetHostAwake(host)
     host.gui.Show((x != "" ? "X" . x . " Y" . y . " " : "") . "w" . w . " h" . h)
     if (x != "")
         WinMove(x, y, w, h, "ahk_id " . host.hwnd)
@@ -719,6 +967,91 @@ ShowHostAt(host, x, y, w, h) {
 }
 HideHost(host) {
     try host.gui.Hide()
+    SetHostAsleep(host)
+}
+; A hidden window's web view is told it is hidden, so it stops painting and animating (before this, the hidden
+; windows kept rendering at full frame rate). Three seconds later, if it is still hidden, the page is suspended
+; (its timers stop) and WebView2 is asked to keep its memory low. Showing the window wakes it.
+SetHostAsleep(host) {
+    if (host == "" || IsHostVisible(host))
+        return
+    host.asleep := true
+    try host.ctl.IsVisible := false
+    SetTimer(host.sleepTimer, -3000)
+    ScheduleUnload(host)
+}
+ScheduleUnload(host) {
+    global memorySaver, MEMORY_SAVER_DELAY
+    SetTimer(host.unloadTimer, (memorySaver && host.loaded) ? -MEMORY_SAVER_DELAY : 0)
+}
+; Memory saver: a window closed for a minute gets its web view shut down; when both are, WebView2 itself exits
+; (all msedgewebview2 processes of Smart Dimmer end). Opening the window starts it again (EnsureHostLoaded).
+UnloadWebView(host) {
+    global flyout, settings, wvEnv
+    if (!host.loaded || IsHostVisible(host))
+        return
+    host.ready := false, host.loaded := false, host.asleep := false
+    SetTimer(host.sleepTimer, 0)
+    host.token := ""                                             ; unhooks the page's message handler
+    try host.ctl.Close()
+    host.ctl := "", host.core := ""
+    LogAction("[UI] " . host.view . " web view shut down to save memory")
+    if ((flyout == "" || !flyout.loaded) && (settings == "" || !settings.loaded)) {
+        wvEnv := ""                                              ; last reference: the WebView2 processes exit
+        LogAction("[UI] WebView2 closed; it starts again when a window is opened")
+        SetTimer(TrimOwnMemory, -5000)
+    }
+}
+TrimOwnMemory() {
+    DllCall("psapi\EmptyWorkingSet", "Ptr", DllCall("GetCurrentProcess", "Ptr"))
+}
+; Makes sure a window has its web view before it is shown.
+EnsureHostLoaded(host) {
+    global uiLastError
+    SetTimer(host.unloadTimer, 0)
+    if (host.loaded)
+        return true
+    t0 := A_TickCount
+    Loop 2 {                                                   ; one quiet retry with a fresh WebView2 environment
+        try {
+            AttachWebView(host)
+            LogAction("[UI] " . host.view . " web view started again in " . (A_TickCount - t0) . " ms")
+            return true
+        } catch as e {
+            uiLastError := e.Message
+            LogAction("[UI] could not start the " . host.view . " web view again (attempt " . A_Index . "): " . ErrText(e))
+            ResetWebView2()
+        }
+    }
+    MsgBox("Smart Dimmer could not open its window:`n`n" . uiLastError . "`n`nHotkeys and the schedule keep working. Try again in a moment; if it keeps happening, restart Smart Dimmer.", "Smart Dimmer", "Iconx")
+    return false
+}
+; Drops the WebView2 environment so the next attempt starts it fresh, unless the other window is still using it.
+ResetWebView2() {
+    global flyout, settings, wvEnv
+    for h in [flyout, settings]
+        if (h != "" && h.loaded)
+            return
+    wvEnv := ""
+    Sleep(500)                                                 ; give the old WebView2 processes a moment to exit
+}
+DeepSleepHost(host) {
+    if (!host.asleep || IsHostVisible(host))
+        return
+    try host.core.MemoryUsageTargetLevel := 1                     ; COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+    try {
+        p := host.core.TrySuspendAsync()
+        p.thrown := true                                         ; nothing waits for it; a refusal must not raise later
+    }
+}
+SetHostAwake(host) {
+    SetTimer(host.sleepTimer, 0)
+    if (host.asleep) {
+        host.asleep := false
+        try host.core.MemoryUsageTargetLevel := 0                 ; normal
+        try host.core.Resume()
+    }
+    try host.ctl.IsVisible := true
 }
 IsHostVisible(host) {
     return host != "" && DllCall("IsWindowVisible", "Ptr", host.hwnd, "Int")
@@ -740,7 +1073,7 @@ GetFlyoutSize() {
     return {W: IsNumber(w) ? Max(340, Integer(w)) : 420, H: IsNumber(h) ? Max(380, Integer(h)) : 660}
 }
 ConstrainToScreenBoundaries(X, Y, W, H) {
-    targetMonitor := 1, midX := X + (W / 2), midY := Y + (H / 2)
+    targetMonitor := MonitorGetPrimary(), midX := X + (W / 2), midY := Y + (H / 2)
     Loop MonitorGetCount() {
         MonitorGet(A_Index, &Left, &Top, &Right, &Bottom)
         if (midX >= Left && midX <= Right && midY >= Top && midY <= Bottom) {
@@ -748,16 +1081,23 @@ ConstrainToScreenBoundaries(X, Y, W, H) {
             break
         }
     }
-    MonitorGetWorkArea(targetMonitor, &wLeft, &wTop, &wRight, &wBottom)
+    try {
+        MonitorGetWorkArea(targetMonitor, &wLeft, &wTop, &wRight, &wBottom)
+    } catch {
+        return {X: Integer(X), Y: Integer(Y)}                ; displays are being reconfigured: leave it as is
+    }
     return {X: Integer(Max(wLeft + 4, Min(X, wRight - W - 4))), Y: Integer(Max(wTop + 4, Min(Y, wBottom - H - 4)))}
 }
 ShowDashboard() {
     global flyout, iniFile
+    if (!EnsureUiReady())
+        return
     sz := GetFlyoutSize()
     lastX := IniRead(iniFile, "Position", "X", "Default"), lastY := IniRead(iniFile, "Position", "Y", "Default")
-    if (lastX == "Default" || lastY == "Default") {
-        MonitorGetWorkArea(1, &wLeft, &wTop, &wRight, &wBottom)
-        posX := wLeft + ((wRight - wLeft) - sz.W) // 2, posY := wTop + ((wBottom - wTop) - sz.H) // 2
+    if (lastX == "Default" || lastY == "Default" || !IsNumber(lastX) || !IsNumber(lastY)) {
+        ; first run: bottom-right of the primary screen's work area, next to the tray like other tray flyouts
+        MonitorGetWorkArea(MonitorGetPrimary(), &wLeft, &wTop, &wRight, &wBottom)
+        posX := wRight - sz.W - 12, posY := wBottom - sz.H - 12
     } else {
         posX := Integer(lastX), posY := Integer(lastY)
     }
@@ -774,24 +1114,24 @@ CloseDashboard() {
 }
 ToggleDashboard() {
     global flyout
-    if (IsHostVisible(flyout) && WinActive("ahk_id " . flyout.hwnd))
+    if (flyout != "" && IsHostVisible(flyout) && WinActive("ahk_id " . flyout.hwnd))
         CloseDashboard()
     else
         ShowDashboard()
 }
 SaveCurrentPosition() {
     global flyout, iniFile
-    if (!IsHostVisible(flyout))
+    if (flyout == "" || !IsHostVisible(flyout))
         return
     WinGetPos(&x, &y, &w, &h, "ahk_id " . flyout.hwnd)
     coords := ConstrainToScreenBoundaries(x, y, w, h)
     if (coords.X != x || coords.Y != y)
         WinMove(coords.X, coords.Y, , , "ahk_id " . flyout.hwnd)
-    IniWrite(coords.X, iniFile, "Position", "X"), IniWrite(coords.Y, iniFile, "Position", "Y")
+    try IniWrite(coords.X, iniFile, "Position", "X"), IniWrite(coords.Y, iniFile, "Position", "Y")
 }
 CheckFocusLoss() {
     global flyout, settings
-    if (!IsHostVisible(flyout))
+    if (flyout == "" || !IsHostVisible(flyout))
         return
     active := WinActive("A")
     if (active == flyout.hwnd || (settings != "" && active == settings.hwnd))
@@ -803,6 +1143,8 @@ CheckFocusLoss() {
 }
 ShowSettingsWindow() {
     global settings, iniFile
+    if (!EnsureUiReady())
+        return
     w := IniRead(iniFile, "Position", "SettingsW", ""), h := IniRead(iniFile, "Position", "SettingsH", "")
     w := IsNumber(w) ? Max(760, Integer(w)) : 900, h := IsNumber(h) ? Max(540, Integer(h)) : 660
     if (IsHostVisible(settings)) {
@@ -1034,6 +1376,9 @@ MonitorHotkeyAction(mIdx, kind, *) {
     monitorSplitMode[mIdx] := 1        ; a per-monitor hotkey implies Independent
     RequestDisplayUpdate()
     SetTimer(SaveSettings, -300)
+    names := MonitorNamesByIndex(), isHW := SubStr(kind, 1, 2) == "HW"
+    ShowOsd((names.Has(mIdx) ? names[mIdx] : "Display " . mIdx) . "  ·  " . (isHW ? "Backlight" : "Software brightness"),
+            isHW ? monitorHW[mIdx] : monitorSW[mIdx], mIdx)
 }
 UpdateActiveHotkeys() {
     global hotkeyUpString, hotkeyDoString, hotkeySWUpString, hotkeySWDoString, monitorHotkeys, hotkeyFlipString
@@ -1062,11 +1407,13 @@ ExecuteVolumeUpAction(*) {
     global currentHardwareBright, hardwareStep, maxHardwareBrightness
     if (currentHardwareBright < maxHardwareBrightness)
         SetMasterHWStep(Min(maxHardwareBrightness, currentHardwareBright + hardwareStep))
+    ShowOsd("Backlight", currentHardwareBright)
 }
 ExecuteVolumeDownAction(*) {
     global currentHardwareBright, hardwareStep, minHardwareBrightness
     if (currentHardwareBright > minHardwareBrightness)
         SetMasterHWStep(Max(minHardwareBrightness, currentHardwareBright - hardwareStep))
+    ShowOsd("Backlight", currentHardwareBright)
 }
 SetMasterHWStep(v) {
     global currentHardwareBright, currentSoftwareDim, linkHardwareSoftware
@@ -1079,11 +1426,102 @@ ExecuteSoftwareUpAction(*) {
     global currentSoftwareDim, hardwareStep, maxHardwareBrightness
     if (currentSoftwareDim < maxHardwareBrightness)
         currentSoftwareDim := Min(maxHardwareBrightness, currentSoftwareDim + hardwareStep), RequestDisplayUpdate()
+    ShowOsd("Software brightness", currentSoftwareDim)
 }
 ExecuteSoftwareDownAction(*) {
     global currentSoftwareDim, hardwareStep, minHardwareBrightness
     if (currentSoftwareDim > minHardwareBrightness)
         currentSoftwareDim := Max(minHardwareBrightness, currentSoftwareDim - hardwareStep), RequestDisplayUpdate()
+    ShowOsd("Software brightness", currentSoftwareDim)
+}
+
+; ---- on-screen indicator ----
+; A small themed bar near the bottom of the screen, shown when a brightness hotkey is used. Native window (no
+; WebView2) so it appears instantly; click-through, never takes focus, fades out after OSD_HOLD_MS.
+global osdGui := "", osdCtl := {}, OSD_HOLD_MS := 1300
+OsdMonitorUnderMouse() {
+    CoordMode("Mouse", "Screen")
+    MouseGetPos(&mx, &my)
+    Loop MonitorGetCount() {
+        try {
+            MonitorGet(A_Index, &L, &T, &R, &B)
+            if (mx >= L && mx < R && my >= T && my < B)
+                return A_Index
+        }
+    }
+    return MonitorGetPrimary()
+}
+OsdTheme(mIdx) {
+    global THEMES, themeName
+    try return (themeName == "Wallpaper") ? WallpaperThemeForMonitor(mIdx) : THEMES[themeName]
+    return THEMES["Lava Orange"]
+}
+ShowOsd(label, value, mIdx := 0) {
+    global osdGui, osdCtl, osdEnabled, OSD_HOLD_MS, GLASS_RADIUS
+    static builtDpi := 0
+    if (!osdEnabled)
+        return
+    if (!mIdx || mIdx > MonitorGetCount())
+        mIdx := OsdMonitorUnderMouse()
+    th := OsdTheme(mIdx)
+    hMon := GetHMonitorFromIndex(mIdx)
+    ; the bar is built per-monitor DPI aware so its text stays sharp on screens scaled differently from the
+    ; main one (the rest of the app is system-DPI aware and would be stretched by Windows there)
+    oldCtx := DllCall("SetThreadDpiAwarenessContext", "Ptr", -4, "Ptr")
+    try {
+        dpi := 96, dpiY := 96
+        try DllCall("shcore\GetDpiForMonitor", "Ptr", hMon, "Int", 0, "UInt*", &dpi, "UInt*", &dpiY)
+        sc := dpi / 96, fs := dpi / A_ScreenDPI          ; AutoHotkey sizes fonts for the system DPI
+        W := Round(340 * sc), H := Round(78 * sc), pad := Round(18 * sc), barH := Round(6 * sc)
+        if (osdGui != "" && builtDpi != dpi)
+            osdGui.Destroy(), osdGui := ""
+        if (osdGui == "") {
+            builtDpi := dpi
+            ; WS_EX_NOACTIVATE (0x08000000) + WS_EX_TRANSPARENT (0x20): never focused, clicks go through
+            osdGui := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale +E0x08000020 +Owner")
+            osdGui.MarginX := 0, osdGui.MarginY := 0
+            osdGui.SetFont("s" . Round(10 * fs, 1) . " w600", "Segoe UI")
+            osdCtl.label := osdGui.Add("Text", "x" pad " y" Round(14 * sc) " w" (W - pad * 2 - Round(80 * sc)) " h" Round(24 * sc) " BackgroundTrans")
+            osdGui.SetFont("s" . Round(15 * fs, 1) . " w700", "Segoe UI")
+            osdCtl.value := osdGui.Add("Text", "x" (W - pad - Round(90 * sc)) " y" Round(8 * sc) " w" Round(90 * sc) " h" Round(32 * sc) " Right BackgroundTrans")
+            osdCtl.track := osdGui.Add("Text", "x" pad " y" (H - pad - barH) " w" (W - pad * 2) " h" barH)
+            osdCtl.fill := osdGui.Add("Text", "x" pad " y" (H - pad - barH) " w1 h" barH)
+            osdGui.Show("Hide w" W " h" H)
+            WinSetTransparent(0, osdGui)
+            DllCall("SetWindowRgn", "Ptr", osdGui.Hwnd, "Ptr", DllCall("CreateRoundRectRgn", "Int", 0, "Int", 0, "Int", W + 1, "Int", H + 1, "Int", Round(GLASS_RADIUS * 2 * sc), "Int", Round(GLASS_RADIUS * 2 * sc), "Ptr"), "Int", 1)
+        }
+        osdGui.BackColor := th.bg
+        osdCtl.label.SetFont("c" . th.muted), osdCtl.label.Text := label
+        osdCtl.value.SetFont("c" . th.text), osdCtl.value.Text := Round(value) . "%"
+        osdCtl.track.Opt("+Background" . th.line)
+        osdCtl.fill.Opt("+Background" . th.accent)
+        osdCtl.fill.Move(, , Max(1, Round((W - pad * 2) * Max(0, Min(100, value)) / 100)))
+        osdCtl.track.Redraw(), osdCtl.fill.Redraw()
+        ; work area in physical pixels (this thread is per-monitor aware right now)
+        mi := Buffer(40, 0), NumPut("UInt", 40, mi)
+        DllCall("GetMonitorInfoW", "Ptr", hMon, "Ptr", mi)
+        L := NumGet(mi, 20, "Int"), R := NumGet(mi, 28, "Int"), B := NumGet(mi, 32, "Int")
+        DllCall("SetWindowPos", "Ptr", osdGui.Hwnd, "Ptr", -1, "Int", L + (R - L - W) // 2, "Int", B - H - Round(56 * sc), "Int", W, "Int", H, "UInt", 0x0010 | 0x0040)   ; HWND_TOPMOST, SWP_NOACTIVATE | SWP_SHOWWINDOW
+        WinSetTransparent(242, osdGui)
+    } finally {
+        DllCall("SetThreadDpiAwarenessContext", "Ptr", oldCtx, "Ptr")
+    }
+    SetTimer(OsdFade, 0)
+    SetTimer(OsdFade, -OSD_HOLD_MS)
+}
+OsdFade() {
+    global osdGui
+    static alpha := 242
+    if (osdGui == "")
+        return
+    try alpha := WinGetTransparent(osdGui)
+    alpha := (alpha == "") ? 242 : alpha - 40
+    if (alpha <= 0) {
+        osdGui.Hide()
+        return
+    }
+    WinSetTransparent(alpha, osdGui)
+    SetTimer(OsdFade, -30)
 }
 
 ; =========================================================================
@@ -1094,7 +1532,9 @@ SelectTheme(name) {
     if (!THEMES.Has(name))
         name := "Lava Orange"
     themeName := name
-    SyncWallpaperWatch()
+    if (name == "Sky")
+        UpdateSkyPalette()
+    SyncWallpaperWatch(), SyncEnvWatch()
     SaveSettings()
     ApplyThemeToHosts()
     PushState()
@@ -1386,6 +1826,7 @@ ThemeFromWallpaperColours(col, intensity := 70, order := "") {
     t.sliderTrack := HslToHex(cBtn.h, surfSat(cBtn, 0.8), 0.24)                          ; slider tracks
     t.sliderFill := fill                                                                  ; slider fills
     t.sliderThumb := thumb                                                                ; thumbs
+    t.accent2 := fill                                                                     ; second accent: the fill colour, so gradients run between two picture colours
     return t
 }
 ; The image analysis (the slow part) is cached per file; the palette itself is cheap and follows the intensity setting.
@@ -1516,7 +1957,7 @@ EditableThemes() {
     global THEME_ORDER
     names := []
     for name in THEME_ORDER
-        if (name != "Wallpaper")
+        if (name != "Wallpaper" && name != "Sky")
             names.Push(name)
     return names
 }
@@ -1875,11 +2316,16 @@ MapRange(value, fromMin, fromMax, toMin, toMax) {
     return toMin + n * (toMax - toMin)
 }
 GetHMonitorFromIndex(mIdx) {
+    if (mIdx < 1 || mIdx > MonitorGetCount())
+        return 0
     MonitorGet(mIdx, &L, &T, &R, &B)
     midX := L + (R - L) // 2, midY := T + (B - T) // 2
     return DllCall("User32\MonitorFromPoint", "Int64", (midX & 0xFFFFFFFF) | (midY << 32), "UInt", 2, "Ptr")
 }
-SetMonitorGammaRamp(mIdx, brightness) {
+; brightness scales all three channels; rMul/gMul/bMul tint them (warmth). Windows may refuse a ramp that strays
+; too far from the identity on some drivers; the tint is then softened step by step until a ramp is accepted.
+SetMonitorGammaRamp(mIdx, brightness, rMul := 1.0, gMul := 1.0, bMul := 1.0) {
+    static warnedSoften := Map()
     hMonitor := GetHMonitorFromIndex(mIdx)
     monInfo := Buffer(104, 0)
     NumPut("UInt", 104, monInfo)
@@ -1889,36 +2335,138 @@ SetMonitorGammaRamp(mIdx, brightness) {
     hDC := DllCall("Gdi32\CreateDCW", "Str", deviceName, "Ptr", 0, "Ptr", 0, "Ptr", 0, "Ptr")
     if (!hDC)
         return false
-    ramp := Buffer(1536, 0)
-    Loop 256 {
-        i := A_Index - 1
-        val := Min(65535, Round(i * 256 * brightness))
-        NumPut("UShort", val, ramp, i * 2), NumPut("UShort", val, ramp, 512 + (i * 2)), NumPut("UShort", val, ramp, 1024 + (i * 2))
+    ramp := Buffer(1536, 0), result := 0
+    Loop 4 {
+        soften := (A_Index - 1) / 4                 ; 0, .25, .5, .75 of the way back to neutral
+        mr := rMul + (1 - rMul) * soften, mg := gMul + (1 - gMul) * soften, mb := bMul + (1 - bMul) * soften
+        Loop 256 {
+            i := A_Index - 1, base := i * 256 * brightness
+            NumPut("UShort", Min(65535, Round(base * mr)), ramp, i * 2)
+            NumPut("UShort", Min(65535, Round(base * mg)), ramp, 512 + (i * 2))
+            NumPut("UShort", Min(65535, Round(base * mb)), ramp, 1024 + (i * 2))
+        }
+        result := DllCall("Gdi32\SetDeviceGammaRamp", "Ptr", hDC, "Ptr", ramp)
+        if (result || (rMul == 1.0 && gMul == 1.0 && bMul == 1.0))
+            break
+        if (!warnedSoften.Has(deviceName)) {
+            warnedSoften[deviceName] := true
+            LogAction("[Gamma] " . deviceName . " refused a warm ramp; softening the tint")
+        }
     }
-    result := DllCall("Gdi32\SetDeviceGammaRamp", "Ptr", hDC, "Ptr", ramp)
     DllCall("Gdi32\DeleteDC", "Ptr", hDC)
     return result ? true : false
 }
 ResetAllGammaRamps(*) {
+    global gammaNow, gammaAnim
+    SetTimer(GammaAnimTick, 0)
+    gammaAnim := Map(), gammaNow := Map()
     Loop MonitorGetCount()
         SetMonitorGammaRamp(A_Index, 1.0)
     LogAction("[Gamma] All monitor gamma ramps reset to default (1.0)")
 }
-UpdateDisplayState() {
+
+; ---- warmth (colour temperature) ----
+; Tanner Helland's blackbody approximation; the channel multipliers are relative to 6500 K so 0 % warmth is neutral.
+KelvinToRGB(K) {
+    t := K / 100
+    r := (t <= 66) ? 255 : 329.698727446 * ((t - 60) ** -0.1332047592)
+    g := (t <= 66) ? 99.4708025861 * Ln(t) - 161.1195681661 : 288.1221695283 * ((t - 60) ** -0.0755148492)
+    b := (t >= 66) ? 255 : (t <= 19) ? 0 : 138.5177312231 * Ln(t - 10) - 305.0447927307
+    return [Max(0, Min(255, r)), Max(0, Min(255, g)), Max(0, Min(255, b))]
+}
+WarmthToKelvin(w) {
+    global WARMTH_K_NEUTRAL, WARMTH_K_WARMEST
+    return Round(WARMTH_K_NEUTRAL - (Max(0, Min(100, w)) / 100) * (WARMTH_K_NEUTRAL - WARMTH_K_WARMEST))
+}
+WarmthMultipliers(w) {
+    static ref := "", cache := Map()
+    if (w <= 0)
+        return [1.0, 1.0, 1.0]
+    if (cache.Has(w))
+        return cache[w]
+    if (ref == "")
+        ref := KelvinToRGB(6500)
+    c := KelvinToRGB(WarmthToKelvin(w))
+    return cache[w] := [Min(1.0, c[1] / ref[1]), Min(1.0, c[2] / ref[2]), Min(1.0, c[3] / ref[3])]
+}
+; Windows Night Light keeps its on/off state in a CloudStore blob; byte 18 is 0x15 when it is on.
+WindowsNightLightOn() {
+    static cachedAt := 0, cached := 0
+    if (A_TickCount - cachedAt < 5000 && cachedAt)
+        return cached
+    cachedAt := A_TickCount, cached := 0
+    try {
+        hex := RegRead("HKCU\Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\Current\default$windows.data.bluelightreduction.bluelightreductionstate\windows.data.bluelightreduction.bluelightreductionstate", "Data")
+        cached := (StrLen(hex) >= 38 && SubStr(hex, 37, 2) = "15") ? 1 : 0
+    }
+    return cached
+}
+
+; ---- smooth gamma transitions ----
+; gammaNow holds what each screen shows ([level, r, g, b]); a change bigger than GAMMA_SMOOTH_MIN fades over
+; GAMMA_ANIM_STEPS ticks of 25 ms (ease-out) when smoothTransitions is on. Small steps (hotkey repeats, slider
+; drags) are applied at once so they stay responsive.
+global gammaNow := Map(), gammaAnim := Map()
+global GAMMA_ANIM_STEPS := 8, GAMMA_SMOOTH_MIN := 0.04
+ApplyGammaSmooth(mIdx, level, mul) {
+    global gammaNow, gammaAnim, smoothTransitions, GAMMA_SMOOTH_MIN
+    target := [level, mul[1], mul[2], mul[3]]
+    if (gammaNow.Has(mIdx)) {
+        cur := gammaNow[mIdx], diff := 0
+        Loop 4
+            diff := Max(diff, Abs(cur[A_Index] - target[A_Index]))
+        ; (an unchanged value is still written: Windows resets ramps after sleep or a display change)
+        if (smoothTransitions && diff > GAMMA_SMOOTH_MIN) {
+            gammaAnim[mIdx] := {from: cur.Clone(), to: target, step: 0}
+            SetTimer(GammaAnimTick, 25)
+            return
+        }
+    }
+    if (gammaAnim.Has(mIdx))
+        gammaAnim.Delete(mIdx)
+    gammaNow[mIdx] := target
+    SetMonitorGammaRamp(mIdx, target[1], target[2], target[3], target[4])
+}
+GammaAnimTick() {
+    global gammaNow, gammaAnim, GAMMA_ANIM_STEPS
+    done := []
+    for mIdx, an in gammaAnim {
+        an.step += 1
+        t := an.step / GAMMA_ANIM_STEPS, e := 1 - (1 - t) ** 3          ; ease-out cubic
+        v := []
+        Loop 4
+            v.Push(an.from[A_Index] + (an.to[A_Index] - an.from[A_Index]) * e)
+        if (an.step >= GAMMA_ANIM_STEPS)
+            v := an.to, done.Push(mIdx)
+        gammaNow[mIdx] := v
+        if (mIdx <= MonitorGetCount())
+            SetMonitorGammaRamp(mIdx, v[1], v[2], v[3], v[4])
+    }
+    for mIdx in done
+        gammaAnim.Delete(mIdx)
+    if (gammaAnim.Count == 0)
+        SetTimer(GammaAnimTick, 0)
+}
+; gammaOnly: only the colour/gamma side changed (warmth, the Software or Warmth tick), so the backlight writes
+; (DDC/CI takes up to a second per monitor and blocks the app meanwhile) are skipped.
+UpdateDisplayState(gammaOnly := false) {
     global currentHardwareBright, currentSoftwareDim, externalMonitorNum, iniFile
-    global minHardwareBrightness, maxHardwareBrightness, maxSoftwareDarkness, dimStates
-    global monitorSplitMode, monitorHW, monitorSW
+    global minHardwareBrightness, maxHardwareBrightness, maxSoftwareDarkness, dimStates, warmStates
+    global monitorSplitMode, monitorHW, monitorSW, warmth
     try {
         IniWrite(currentHardwareBright, iniFile, "Settings", "LastHardwareBright")
         IniWrite(currentSoftwareDim, iniFile, "Settings", "LastSoftwareDim")
+        IniWrite(warmth, iniFile, "Settings", "Warmth")
     }
+    warmMul := WarmthMultipliers(warmth)
     monitorCount := MonitorGetCount()
     splitExclusions := ""
     Loop monitorCount {
         if (monitorSplitMode.Has(A_Index) && monitorSplitMode[A_Index] == 1)
             splitExclusions .= (splitExclusions = "" ? "" : ",") . A_Index
     }
-    NativeSetMonitorBrightness(currentHardwareBright, externalMonitorNum, splitExclusions)
+    if (!gammaOnly)
+        NativeSetMonitorBrightness(currentHardwareBright, externalMonitorNum, splitExclusions)
     minGammaFloor := Max(0.05, 1.0 - (maxSoftwareDarkness / 255))
     Loop monitorCount {
         mIdx := A_Index
@@ -1926,11 +2474,14 @@ UpdateDisplayState() {
         swValue := isSplit ? (monitorSW.Has(mIdx) ? monitorSW[mIdx] : currentSoftwareDim) : currentSoftwareDim
         calculatedGamma := Max(minGammaFloor, MapRange(swValue, minHardwareBrightness, maxHardwareBrightness, 0.0, 1.0))
         isDimEnabled := !dimStates.Has(mIdx) || dimStates[mIdx] == 1
-        SetMonitorGammaRamp(mIdx, (calculatedGamma < 1.0 && isDimEnabled) ? calculatedGamma : 1.0)
-        if (isSplit)
+        ; brightness and warmth share the gamma ramp but have separate ticks: a screen can be warmed without
+        ; being dimmed (level 1.0 with the tint) and dimmed without being warmed
+        ApplyGammaSmooth(mIdx, (calculatedGamma < 1.0 && isDimEnabled) ? calculatedGamma : 1.0, IsWarmTarget(mIdx) ? warmMul : [1.0, 1.0, 1.0])
+        ; a screen's Backlight tick gates its own slider too: unticked means "leave this screen's backlight alone"
+        if (!gammaOnly && isSplit && IsBacklightTarget(mIdx))
             NativeSetMonitorBrightness(monitorHW.Has(mIdx) ? monitorHW[mIdx] : currentHardwareBright, String(mIdx), "", true)
     }
-    LogAction("[Gamma Router] Master software brightness=" . currentSoftwareDim)
+    LogAction("[Gamma Router] Master software brightness=" . currentSoftwareDim . (warmth ? ", warmth " . warmth . "% (" . WarmthToKelvin(warmth) . " K)" : ""))
 }
 OnDisplayChange(wParam, lParam, msg, hwnd) {
     global lastKnownMonitorCount
@@ -2076,7 +2627,7 @@ ScheduleStatusLines() {
     else if (st == "")
         l1 := "No enabled entry has a valid time (use HH:mm)."
     else
-        l1 := "Now " . FormatTime(, "HH:mm") . ": following the " . st.time . " entry -> hardware " . st.hw . "%, software " . st.sw . "%.  Next: " . st.nextTime . "."
+        l1 := "Since " . st.time . ": backlight " . st.hw . "%, software " . st.sw . "%. Next change at " . st.nextTime . "."
     l2 := ""
     if (schedEnabled && st != "" && schedPausedIdx == st.idx)
         l2 := "Paused after a manual change until the " . st.nextTime . " entry."
@@ -2122,6 +2673,713 @@ HandleScheduleCommand(a, b, c, d, e) {
 }
 
 ; =========================================================================
+; 🌙 WARMTH SCHEDULE (f.lux style)
+; =========================================================================
+DefaultWarmPhases() => [{name: "Daytime", time: "07:00", level: 0}, {name: "Evening", time: "20:00", level: 60}, {name: "Bedtime", time: "23:00", level: 80}]
+NowMinsF() => (Integer(A_Hour) * 60) + Integer(A_Min) + (Integer(A_Sec) / 60)
+WarmPhaseByName(name) {
+    global warmPhases
+    for ph in warmPhases
+        if (ph.name = name)
+            return ph
+    return ""
+}
+; The parts of the day with a valid time, sorted by time.
+WarmPhaseList() {
+    global warmPhases
+    list := []
+    for ph in warmPhases
+        if ParseHHMM(ph.time, &mins)
+            list.Push({name: ph.name, time: ph.time, level: ph.level, mins: mins})
+    Loop list.Length {
+        i := A_Index
+        Loop i - 1 {
+            j := i - A_Index
+            if (list[j].mins > list[j + 1].mins)
+                tmp := list[j], list[j] := list[j + 1], list[j + 1] := tmp
+        }
+    }
+    return list
+}
+; Warmth at a time of day (minutes since midnight, fractions allowed). A part of the day starts at its time and
+; moves from the previous part's warmth to its own over warmFadeMin minutes (never longer than the part itself,
+; so every part is fully reached before the next one starts).
+WarmStateAt(nowMins, list := "") {
+    global warmFadeMin
+    if (list == "")
+        list := WarmPhaseList()
+    if (list.Length == 0)
+        return ""
+    curPos := 0
+    for k, e in list
+        if (e.mins <= nowMins)
+            curPos := k
+    if (curPos == 0)
+        curPos := list.Length
+    cur := list[curPos], prev := list[(curPos == 1) ? list.Length : curPos - 1], nxt := list[(curPos == list.Length) ? 1 : curPos + 1]
+    since := nowMins - cur.mins
+    if (since < 0)
+        since += 1440
+    gap := nxt.mins - cur.mins
+    if (gap <= 0)
+        gap += 1440
+    fade := Min(warmFadeMin, gap)
+    lvl := cur.level, fading := false
+    if (fade > 0 && since < fade && list.Length > 1)
+        lvl := prev.level + (cur.level - prev.level) * (since / fade), fading := true
+    doneMins := Mod(cur.mins + fade, 1440)
+    return {level: Round(lvl), name: cur.name, time: cur.time, target: cur.level, fading: fading,
+            doneAt: Format("{:02}:{:02}", doneMins // 60, Mod(doneMins, 60)), nextName: nxt.name, nextTime: nxt.time}
+}
+SetWarmScheduleEnabled(on) {
+    global warmSchedEnabled, warmPausedPhase, warmLastKey
+    warmSchedEnabled := on ? 1 : 0
+    warmPausedPhase := "", warmLastKey := ""
+    if (warmSchedEnabled) {
+        SetTimer(WarmScheduleTick, 15000)
+        WarmScheduleTick()
+    } else {
+        SetTimer(WarmScheduleTick, 0)
+    }
+    SaveSettings(), PushState()
+}
+WarmScheduleTick() {
+    global warmSchedEnabled, warmPausedPhase, warmLastKey, warmth, warmPreviewFrom
+    if (!warmSchedEnabled || warmPreviewFrom != "")
+        return
+    st := WarmStateAt(NowMinsF())
+    if (st == "")
+        return
+    if (warmPausedPhase != "") {
+        if (warmPausedPhase == st.name)
+            return
+        warmPausedPhase := ""                       ; the next part of the day has begun: follow the schedule again
+        LogAction("[Warmth] schedule resumed at " . st.name)
+    }
+    key := st.name . "|" . st.level
+    if (key == warmLastKey)
+        return
+    phaseChanged := (SubStr(warmLastKey, 1, StrLen(st.name) + 1) != st.name . "|")
+    warmLastKey := key
+    if (st.level != warmth) {
+        warmth := st.level
+        UpdateDisplayState(true)
+        SetTimer(SaveSettings, -1000)
+    }
+    if (phaseChanged)
+        LogAction("[Warmth] " . st.name . " (from " . st.time . ") -> warmth " . st.level . "% (" . WarmthToKelvin(st.level) . " K)")
+    PushState()
+}
+NoteWarmManual() {
+    global warmSchedEnabled, warmPausedPhase, warmLastKey
+    if (!warmSchedEnabled)
+        return
+    st := WarmStateAt(NowMinsF())
+    warmPausedPhase := (st != "") ? st.name : ""
+    warmLastKey := ""
+}
+; While a part's warmth slider is moved on the Warmth page, the screens show that warmth (a preview); two seconds
+; after the last move they go back to what the schedule (or the flyout slider) says.
+WarmPreview(level) {
+    global warmth, warmPreviewFrom
+    if (warmPreviewFrom == "")
+        warmPreviewFrom := warmth
+    warmth := level
+    SetTimer(WarmPreviewApply, -60)             ; one named timer, so a fast drag coalesces into few gamma writes
+    SetTimer(EndWarmPreview, -2000)
+}
+WarmPreviewApply() => UpdateDisplayState(true)
+EndWarmPreview() {
+    global warmth, warmPreviewFrom, warmSchedEnabled, warmPausedPhase, warmLastKey
+    if (warmPreviewFrom == "")
+        return
+    back := warmPreviewFrom, warmPreviewFrom := ""
+    if (warmSchedEnabled && warmPausedPhase == "") {
+        warmLastKey := ""
+        WarmScheduleTick()
+        return
+    }
+    warmth := back
+    UpdateDisplayState(true), PushState()
+}
+HandleWarmSchedCommand(a, b, c) {
+    global warmFadeMin, warmPausedPhase, warmLastKey, warmSchedEnabled
+    switch a {
+        case "enabled":
+            SetWarmScheduleEnabled(Integer(b))
+            return
+        case "resume":
+            warmPausedPhase := "", warmLastKey := ""
+            if (!warmSchedEnabled) {
+                SetWarmScheduleEnabled(1)
+                return
+            }
+        case "time":                                   ; b = part of the day, c = HH:mm
+            ph := WarmPhaseByName(b)
+            if (ph == "")
+                return
+            if !ParseHHMM(c, &mins) {
+                Toast("Use a time like 20:30.")
+                PushState()
+                return
+            }
+            ph.time := Format("{:02}:{:02}", mins // 60, Mod(mins, 60))
+        case "level":                                  ; b = part of the day, c = 0..100
+            ph := WarmPhaseByName(b)
+            if (ph == "" || !IsNumber(c))
+                return
+            ph.level := Clamp(c)
+            WarmPreview(ph.level)
+            SetTimer(SaveSettings, -500)
+            PushState()
+            return
+        case "fade":
+            warmFadeMin := Max(0, Min(180, Integer(b)))
+    }
+    warmLastKey := ""
+    SaveSettings()
+    if (warmSchedEnabled)
+        WarmScheduleTick()
+    PushState()
+}
+; For the page: the parts of the day, a status line and the day's warmth curve from noon to noon (every 10 min).
+WarmScheduleState() {
+    global warmSchedEnabled, warmFadeMin, warmPhases, warmPausedPhase
+    static curveKey := "", curve := []
+    list := WarmPhaseList()
+    key := warmFadeMin
+    for e in list
+        key .= "|" . e.mins . ":" . e.level
+    if (key != curveKey) {
+        ; built in a local array and swapped in when complete: a state push from another thread can interrupt
+        ; this loop, and filling the shared array directly glued two curves together on the timeline
+        c := []
+        Loop 145 {
+            st := WarmStateAt(Mod(720 + (A_Index - 1) * 10, 1440), list)
+            c.Push(st == "" ? 0 : st.level)
+        }
+        curveKey := key, curve := c
+    }
+    phases := []
+    for ph in warmPhases
+        phases.Push({name: ph.name, time: ph.time, level: ph.level})
+    st := WarmStateAt(NowMinsF(), list)
+    if (st == "")
+        status := "Give each part of the day a time like 20:30."
+    else if (!warmSchedEnabled)
+        status := "Off. The Warmth slider in the flyout sets the warmth by hand."
+    else if (warmPausedPhase != "")
+        status := "Paused after a manual change. Follows the schedule again when " . st.nextName . " starts at " . st.nextTime . "."
+    else if (st.fading)
+        status := st.name . ": moving to " . (st.target ? WarmthToKelvin(st.target) . " K" : "neutral") . " until " . st.doneAt . ". " . st.nextName . " starts at " . st.nextTime . "."
+    else
+        status := st.name . ": " . (st.level ? WarmthToKelvin(st.level) . " K" : "neutral colour") . ". " . st.nextName . " starts at " . st.nextTime . "."
+    nowM := NowMinsF()
+    return {enabled: warmSchedEnabled, fade: warmFadeMin, phases: phases, paused: (warmPausedPhase != "") ? 1 : 0,
+            now: (st == "") ? "" : st.name, status: status, curve: curve, nowPos: Mod(nowM - 720 + 1440, 1440) / 1440}
+}
+
+; =========================================================================
+; 🌦 WEATHER + TIME OF DAY: automatic theme and the Sky theme
+; =========================================================================
+DefaultAutoThemeMap() => Map("Morning", "Lavender Pink", "Day", "Aqua Blue", "Evening", "Amber Night", "Night", "Milky Way",
+                             "Cloudy", "Graphite", "Rain", "Tokyo Night", "Snow", "Nord Frost", "Storm", "Cyber Neon", "Fog", "Sky")
+Atan2(y, x) {
+    static PI := 3.141592653589793
+    if (x > 0)
+        return ATan(y / x)
+    if (x < 0)
+        return (y >= 0) ? ATan(y / x) + PI : ATan(y / x) - PI
+    return (y > 0) ? PI / 2 : (y < 0) ? -PI / 2 : 0
+}
+; Sun position (about 1 degree accurate): elevation above the horizon, hour angle (negative before solar noon)
+; and the elevation at solar noon, for a place and a moment (Unix seconds, default now).
+SunPosition(lat, lon, unixSecs := "") {
+    static RAD := 3.141592653589793 / 180
+    if (unixSecs == "")
+        unixSecs := DateDiff(A_NowUTC, "19700101000000", "Seconds")
+    n := unixSecs / 86400 + 2440587.5 - 2451545.0
+    meanLong := Mod(280.460 + 0.9856474 * n, 360)
+    anom := Mod(357.528 + 0.9856003 * n, 360) * RAD
+    eclLong := (meanLong + 1.915 * Sin(anom) + 0.020 * Sin(2 * anom)) * RAD
+    obl := (23.439 - 0.0000004 * n) * RAD
+    ra := Atan2(Cos(obl) * Sin(eclLong), Cos(eclLong)) / RAD
+    dec := ASin(Sin(obl) * Sin(eclLong))
+    gmst := Mod(18.697374558 + 24.06570982441908 * n, 24)
+    ha := Mod(gmst * 15 + lon - ra + 540, 360) - 180
+    elev := ASin(Sin(lat * RAD) * Sin(dec) + Cos(lat * RAD) * Cos(dec) * Cos(ha * RAD)) / RAD
+    return {elev: elev, ha: ha, noonElev: 90 - Abs(lat - dec / RAD)}
+}
+HasPlace() {
+    global locLat, locLon
+    return (locLat != "" && IsNumber(locLat) && IsNumber(locLon))
+}
+; Part of the day now. With a place: from the sun (night below -6 degrees, morning/evening while it is low,
+; day once it is up; the "up" height adapts to latitude and season). Without one: from the clock.
+TimeOfDayNow() {
+    global locLat, locLon
+    if HasPlace() {
+        sp := SunPosition(Float(locLat), Float(locLon))
+        dayAt := Max(2, Min(12, sp.noonElev * 0.5))
+        slot := (sp.elev < -6) ? "Night" : (sp.elev < dayAt) ? ((sp.ha < 0) ? "Morning" : "Evening") : "Day"
+        return {slot: slot, elev: sp.elev, located: 1, morning: sp.ha < 0, dayAt: dayAt}
+    }
+    hr := Integer(A_Hour) + Integer(A_Min) / 60
+    slot := (hr >= 6 && hr < 9) ? "Morning" : (hr >= 9 && hr < 17) ? "Day" : (hr >= 17 && hr < 20.5) ? "Evening" : "Night"
+    ; a stand-in sun for the Sky theme: up from 06:30 to 19:30
+    elev := (hr >= 6.5 && hr <= 19.5) ? 50 * Sin(3.14159265 * (hr - 6.5) / 13) : -18 * Sin(3.14159265 * (((hr < 6.5) ? hr + 24 : hr) - 19.5) / 11)
+    return {slot: slot, elev: elev, located: 0, hour: hr}
+}
+; Today's sunrise and sunset ("HH:mm", local time) for the chosen place, found by stepping through the day.
+SunTimesToday() {
+    global locLat, locLon
+    static cacheKey := "", cached := ""
+    if !HasPlace()
+        return ""
+    key := SubStr(A_Now, 1, 8) . "|" . locLat . "|" . locLon
+    if (key == cacheKey)
+        return cached
+    offset := DateDiff(A_Now, A_NowUTC, "Seconds")
+    start := DateDiff(SubStr(A_Now, 1, 8) . "000000", "19700101000000", "Seconds") - offset
+    riseAt := "", setAt := "", prev := ""
+    Loop 289 {
+        m := (A_Index - 1) * 5
+        e := SunPosition(Float(locLat), Float(locLon), start + m * 60).elev
+        if (prev != "") {
+            if (prev < -0.833 && e >= -0.833 && riseAt == "")
+                riseAt := Format("{:02}:{:02}", (m - 5) // 60, Mod(m - 5, 60))
+            if (prev >= -0.833 && e < -0.833 && setAt == "")
+                setAt := Format("{:02}:{:02}", (m - 5) // 60, Mod(m - 5, 60))
+        }
+        prev := e
+    }
+    cacheKey := key, cached := {rise: riseAt, set: setAt}
+    return cached
+}
+; WMO weather codes (Open-Meteo) -> the five kinds a theme can be picked for, and a short description.
+WeatherKind(code) {
+    if !IsNumber(code)
+        return ""
+    c := Integer(code)
+    return (c <= 2) ? "Clear" : (c == 3) ? "Cloudy" : (c == 45 || c == 48) ? "Fog" : (c >= 95) ? "Storm"
+         : ((c >= 71 && c <= 77) || c == 85 || c == 86) ? "Snow" : "Rain"
+}
+WeatherText(code) {
+    static T := Map(0, "Clear sky", 1, "Mainly clear", 2, "Partly cloudy", 3, "Overcast", 45, "Fog", 48, "Freezing fog",
+        51, "Light drizzle", 53, "Drizzle", 55, "Heavy drizzle", 56, "Freezing drizzle", 57, "Freezing drizzle",
+        61, "Light rain", 63, "Rain", 65, "Heavy rain", 66, "Freezing rain", 67, "Freezing rain",
+        71, "Light snow", 73, "Snow", 75, "Heavy snow", 77, "Snow grains", 80, "Rain showers", 81, "Rain showers",
+        82, "Heavy showers", 85, "Snow showers", 86, "Snow showers", 95, "Thunderstorm", 96, "Thunderstorm with hail", 99, "Thunderstorm with hail")
+    return (IsNumber(code) && T.Has(Integer(code))) ? T[Integer(code)] : ""
+}
+; The weather counts while it is less than 3 hours old.
+CurrentWeatherKind() {
+    global weatherNow
+    return (weatherNow.kind != "" && A_TickCount - weatherNow.tick < 3 * 3600000) ? weatherNow.kind : ""
+}
+; ---- Sky theme: sky colours by sun height, tinted by the weather ----
+SkyTheme(elev, kind) {
+    ; sun height -> [background, accent, second accent] as [hue, saturation, lightness]
+    static KF := [[-14, [228, .45, .065], [220, .90, .74], [265, .85, .74]],      ; night: moonlit blue into violet
+                  [-6,  [252, .40, .080], [290, .72, .72], [215, .85, .68]],      ; blue hour
+                  [0,   [335, .30, .085], [18, .95, .62],  [338, .85, .66]],      ; sunrise / sunset: orange into pink
+                  [8,   [26, .32, .085],  [38, .95, .60],  [12, .90, .62]],       ; golden hour
+                  [25,  [210, .42, .085], [199, .92, .60], [172, .70, .52]]]      ; day: sky blue into teal
+    static WX := Map("Cloudy", [.55, [215, .12, .09], [210, .28, .72], [222, .22, .62]],
+                     "Fog",    [.65, [210, .08, .10], [200, .14, .78], [212, .12, .64]],
+                     "Rain",   [.60, [212, .30, .08], [205, .68, .66], [188, .58, .56]],
+                     "Snow",   [.60, [210, .26, .10], [200, .75, .84], [222, .60, .78]],
+                     "Storm",  [.70, [262, .35, .07], [268, .85, .72], [50, .95, .62]])
+    mixHsl(x, y, k) => [HueMix(x[1], y[1], k), x[2] + (y[2] - x[2]) * k, x[3] + (y[3] - x[3]) * k]
+    e := Max(KF[1][1], Min(KF[KF.Length][1], elev))
+    i := 1
+    while (i < KF.Length - 1 && e > KF[i + 1][1])
+        i += 1
+    a := KF[i], b := KF[i + 1], f := (e - a[1]) / (b[1] - a[1])
+    bg := mixHsl(a[2], b[2], f), ac := mixHsl(a[3], b[3], f), ac2 := mixHsl(a[4], b[4], f)
+    if WX.Has(kind) {
+        w := WX[kind], k := w[1] * ((elev < -6) ? 0.6 : 1.0)
+        bg := mixHsl(bg, w[2], k), ac := mixHsl(ac, w[3], k), ac2 := mixHsl(ac2, w[4], k)
+    }
+    surf(dl, smul := 1.0) => HslToHex(bg[1], Max(0, Min(1, bg[2] * smul)), Max(0, Min(1, bg[3] + dl)))
+    t := MakeTheme(surf(0), HslToHex(bg[1], Min(.30, bg[2]), .95), HslToHex(bg[1], Min(.30, bg[2] * .7 + .08), .70),
+                   HslToHex(ac[1], ac[2], ac[3]), surf(.13, .8), surf(.06, .9), surf(.035), surf(.28, .7), HslToHex(ac2[1], ac2[2], ac2[3]))
+    t.sliderThumb := HslToHex(ac[1], ac[2], Min(.85, ac[3] + .10))
+    return t
+}
+UpdateSkyPalette() {
+    global THEMES
+    THEMES["Sky"] := SkyTheme(TimeOfDayNow().elev, CurrentWeatherKind())
+}
+; Theme the automatic mode would show now, and why.
+AutoThemeResolve(tod := "") {
+    global autoThemeMap, autoWeatherScope
+    if (tod == "")
+        tod := TimeOfDayNow()
+    name := autoThemeMap[tod.slot], why := tod.slot
+    k := CurrentWeatherKind()
+    if (k != "" && k != "Clear" && autoThemeMap.Has(k) && autoThemeMap[k] != "" && (autoWeatherScope == "always" || tod.slot != "Night"))
+        name := autoThemeMap[k], why := tod.slot . ", " . StrLower(k)
+    return {name: name, why: why}
+}
+; ---- blending: every part of the day and kind of weather mixes into its own palette ----
+HexRgb(hex) => [Integer("0x" . SubStr(hex, 1, 2)), Integer("0x" . SubStr(hex, 3, 2)), Integer("0x" . SubStr(hex, 5, 2))]
+HueGap(a, b) => Abs(Mod(b - a + 540, 360) - 180)
+; Mix two colours. Close hues travel round the colour wheel (so the mix stays vivid); for far-apart or greyish
+; colours the hue comes from the plain RGB mix, with saturation and lightness taken from the two colours.
+MixHex(a, b, k) {
+    if (k <= 0.001 || a = b)
+        return a
+    if (k >= 0.999)
+        return b
+    c1 := HexRgb(a), c2 := HexRgb(b)
+    h1 := RgbToHsl(c1[1], c1[2], c1[3]), h2 := RgbToHsl(c2[1], c2[2], c2[3])
+    if (h1[2] > 0.25 && h2[2] > 0.25 && HueGap(h1[1], h2[1]) <= 75)
+        hue := HueMix(h1[1], h2[1], k)
+    else {
+        hm := RgbToHsl(c1[1] + (c2[1] - c1[1]) * k, c1[2] + (c2[2] - c1[2]) * k, c1[3] + (c2[3] - c1[3]) * k)
+        hue := (hm[2] > 0.06) ? hm[1] : ((k < 0.5) ? h1[1] : h2[1])
+    }
+    return HslToHex(hue, h1[2] + (h2[2] - h1[2]) * k, h1[3] + (h2[3] - h1[3]) * k)
+}
+; Blend two themes. Surfaces, lines and text mix by k. Accents mix too when their hues are close; when they are far
+; apart (amber and blue, say) a half-way colour would be mud, so the leading theme keeps its accent and the other
+; theme's accent becomes the second accent: gradients and glows then run between the two themes' colours.
+BlendTheme(t1, t2, k) {
+    global COLOR_SLOTS
+    if (k <= 0.001)
+        return CloneTheme(t1)
+    c := {}
+    for slot in COLOR_SLOTS
+        c.%slot[1]% := MixHex(t1.%slot[1]%, t2.%slot[1]%, k)
+    a1 := HexRgb(t1.accent), a2 := HexRgb(t2.accent)
+    if (HueGap(RgbToHsl(a1*)[1], RgbToHsl(a2*)[1]) > 75 && k >= 0.15) {
+        lead := (k < 0.5) ? t1 : t2, other := (k < 0.5) ? t2 : t1
+        for slot in ["accent", "checkOn", "sliderFill", "sliderThumb"]
+            c.%slot% := lead.%slot%
+        c.accent2 := other.accent
+    }
+    return c
+}
+ThemeByName(name) {
+    global THEMES
+    if (name == "Wallpaper")
+        return WallpaperThemeForMonitor(MonitorGetPrimary())
+    return THEMES.Has(name) ? THEMES[name] : THEMES["Lava Orange"]
+}
+; How much each part of the day counts right now (one or two parts, summing to 1): the themes cross-fade while
+; the sun passes dawn and dusk (with a place) or around the clock times (without one).
+TimeWeights(tod) {
+    ramp(x, lo, hi) => Max(0, Min(1, (x - lo) / (hi - lo)))
+    q(x) => Round(x * 20) / 20                               ; 5 % steps: the palette changes in visible steps, not every minute
+    if (tod.located) {
+        e := tod.elev, lo := Max(-2, tod.dayAt - 3), hi := Max(lo + 2, tod.dayAt + 3)
+        edge := tod.morning ? "Morning" : "Evening"
+        if (e <= -8)
+            return Map("Night", 1)
+        if (e < -2)
+            return q(ramp(e, -8, -2)) >= 1 ? Map(edge, 1) : Map("Night", 1 - q(ramp(e, -8, -2)), edge, q(ramp(e, -8, -2)))
+        if (e <= lo)
+            return Map(edge, 1)
+        if (e < hi)
+            return Map(edge, 1 - q(ramp(e, lo, hi)), "Day", q(ramp(e, lo, hi)))
+        return Map("Day", 1)
+    }
+    ; by the clock: half-hour cross-fades around 06:00, 09:00, 17:00 and 20:30
+    hr := tod.hour
+    for b in [[6, "Night", "Morning"], [9, "Morning", "Day"], [17, "Day", "Evening"], [20.5, "Evening", "Night"]] {
+        if (hr >= b[1] - 0.5 && hr < b[1] + 0.5) {
+            k := q(ramp(hr, b[1] - 0.5, b[1] + 0.5))
+            return (k <= 0) ? Map(b[2], 1) : (k >= 1) ? Map(b[3], 1) : Map(b[2], 1 - k, b[3], k)
+        }
+    }
+    return Map(tod.slot, 1)
+}
+; The automatic palette for given part-of-day weights and weather kind.
+AutoBlendFor(weights, kind, isNight := false) {
+    global autoThemeMap, autoWeatherScope, autoWeatherStrength
+    names := [], ws := []
+    for slotName, w in weights
+        if (w > 0)
+            names.Push(slotName), ws.Push(w)
+    base := ThemeByName(autoThemeMap[names[1]])
+    if (names.Length > 1)
+        base := BlendTheme(base, ThemeByName(autoThemeMap[names[2]]), ws[2] / (ws[1] + ws[2]))
+    wk := 0
+    if (kind != "" && kind != "Clear" && autoThemeMap.Has(kind) && autoThemeMap[kind] != "" && (autoWeatherScope == "always" || !isNight))
+        wk := autoWeatherStrength / 100
+    return {theme: (wk > 0) ? BlendTheme(base, ThemeByName(autoThemeMap[kind]), wk) : CloneTheme(base), weather: wk}
+}
+AutoBlendNow(tod := "") {
+    global autoThemeMap, autoWeatherStrength
+    if (tod == "")
+        tod := TimeOfDayNow()
+    weights := TimeWeights(tod)
+    night := weights.Has("Night") && weights["Night"] >= 0.5
+    kind := CurrentWeatherKind()
+    r := AutoBlendFor(weights, kind, night)
+    parts := []
+    for slotName, w in weights
+        parts.Push(autoThemeMap[slotName] . (weights.Count > 1 ? " " . Round(w * 100) . "%" : ""))
+    label := Join(parts, " + ")
+    if (r.weather > 0)
+        label .= ", with " . Round(r.weather * 100) . "% " . autoThemeMap[kind] . " for the " . StrLower(kind == "Rain" ? "rain" : kind == "Cloudy" ? "clouds" : kind)
+    r.label := label, r.weights := weights, r.kind := kind
+    return r
+}
+UpdateAutoPalette() {
+    global THEMES
+    THEMES["Automatic"] := AutoBlendNow().theme
+}
+; Like SelectTheme, but leaves the automatic mode on.
+ApplyThemeName(name) {
+    global themeName, THEMES
+    themeName := THEMES.Has(name) ? name : "Lava Orange"
+    if (themeName == "Sky")
+        UpdateSkyPalette()
+    SyncWallpaperWatch(), SyncEnvWatch()
+    SaveSettings(), ApplyThemeToHosts(), PushState()
+}
+SyncEnvWatch() {
+    global autoThemeEnabled, themeName
+    SetTimer(EnvTick, (autoThemeEnabled || themeName == "Sky") ? 60000 : 0)
+}
+; Every minute while the automatic theme or Sky is in use: weather when due, the Sky palette, the automatic choice.
+EnvTick() {
+    global autoThemeEnabled, themeName, THEMES, envLastSig, weatherFetchTick, autoLastSig, autoLastLabel, COLOR_SLOTS
+    if (!autoThemeEnabled && themeName != "Sky") {
+        SetTimer(EnvTick, 0)
+        return
+    }
+    if (HasPlace() && (!weatherFetchTick || A_TickCount - weatherFetchTick > 20 * 60000))
+        FetchWeather()
+    tod := TimeOfDayNow()
+    sky := SkyTheme(tod.elev, CurrentWeatherKind())
+    sig := sky.bg . sky.accent . sky.accent2 . sky.input
+    skyChanged := (sig != envLastSig), envLastSig := sig
+    THEMES["Sky"] := sky
+    if (autoThemeEnabled) {
+        r := AutoBlendNow(tod)
+        THEMES["Automatic"] := r.theme
+        sig := ""
+        for slot in COLOR_SLOTS
+            sig .= r.theme.%slot[1]%
+        switched := (themeName != "Automatic")
+        if (switched) {
+            themeName := "Automatic"
+            SyncWallpaperWatch(), SaveSettings()
+        }
+        if (switched || sig != autoLastSig) {
+            autoLastSig := sig
+            ApplyThemeToHosts(), PushState()
+        }
+        if (r.label != autoLastLabel)
+            autoLastLabel := r.label, LogAction("[Auto theme] " . r.label)
+        return
+    }
+    if (skyChanged && themeName == "Sky")
+        ApplyThemeToHosts(), PushState()
+}
+; ---- network: small asynchronous GET (WinHTTP), so the app never waits on the internet ----
+HttpGetAsync(url, cb) {
+    try {
+        req := ComObject("WinHttp.WinHttpRequest.5.1")
+        req.Open("GET", url, true)
+        req.SetRequestHeader("User-Agent", "SmartDimmer/1.1 (+https://github.com/Xyberg-001/SmartDimmer)")
+        req.Send()
+    } catch as e {
+        cb(0, e.Message)
+        return
+    }
+    started := A_TickCount
+    poll() {
+        try {
+            done := req.WaitForResponse(0)
+        } catch as e {
+            SetTimer(poll, 0)
+            cb(0, "no connection (" . Trim(StrReplace(e.Message, "`n", " ")) . ")")
+            return
+        }
+        if (done) {
+            SetTimer(poll, 0)
+            try cb(req.Status, req.ResponseText)
+            catch as e
+                cb(0, e.Message)
+        } else if (A_TickCount - started > 15000) {
+            SetTimer(poll, 0)
+            try req.Abort()
+            cb(0, "timed out")
+        }
+    }
+    SetTimer(poll, 150)
+}
+UriEncode(str) {
+    buf := Buffer(StrPut(str, "UTF-8")), StrPut(str, buf, "UTF-8"), out := ""
+    Loop buf.Size - 1 {
+        c := NumGet(buf, A_Index - 1, "UChar")
+        out .= ((c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A) || c == 0x2D || c == 0x2E || c == 0x5F || c == 0x7E) ? Chr(c) : Format("%{:02X}", c)
+    }
+    return out
+}
+JsonNum(obj, key) => RegExMatch(obj, '"' . key . '"\s*:\s*(-?[0-9.eE+-]+)', &m) ? m[1] : ""
+JsonText(obj, key) => RegExMatch(obj, '"' . key . '"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) ? JsonUnescape(m[1]) : ""
+JsonUnescape(s) {
+    out := "", i := 1
+    while (pos := RegExMatch(s, "\\(u[0-9a-fA-F]{4}|.)", &m, i)) {
+        out .= SubStr(s, i, pos - i)
+        c := m[1]
+        out .= (StrLen(c) == 5) ? Chr(Integer("0x" . SubStr(c, 2))) : (c == "n") ? "`n" : (c == "t") ? "`t" : (c == "r" || c == "b" || c == "f") ? "" : c
+        i := pos + StrLen(m[0])
+    }
+    return out . SubStr(s, i)
+}
+FetchWeather() {
+    global locLat, locLon, weatherFetchTick
+    if !HasPlace()
+        return
+    weatherFetchTick := A_TickCount
+    HttpGetAsync("https://api.open-meteo.com/v1/forecast?latitude=" . locLat . "&longitude=" . locLon
+        . "&current=weather_code,temperature_2m,is_day&timezone=auto", OnWeatherReply)
+}
+OnWeatherReply(status, body) {
+    global weatherNow
+    if (status != 200 || !RegExMatch(body, '"current"\s*:\s*(\{[^{}]*\})', &m)) {
+        weatherNow.error := status ? "the weather service answered " . status : body
+        LogAction("[Weather] update failed: " . weatherNow.error)
+        PushState()
+        return
+    }
+    code := JsonNum(m[1], "weather_code")
+    weatherNow.code := code, weatherNow.kind := WeatherKind(code), weatherNow.text := WeatherText(code)
+    weatherNow.temp := JsonNum(m[1], "temperature_2m"), weatherNow.at := FormatTime(, "HH:mm"), weatherNow.tick := A_TickCount, weatherNow.error := ""
+    LogAction("[Weather] " . weatherNow.text . " (code " . code . ", " . weatherNow.kind . "), " . weatherNow.temp . " C")
+    EnvTick()
+    PushState()
+}
+LocationSearch(q) {
+    global locSearching, locResults
+    q := Trim(q)
+    if (q == "")
+        return
+    locSearching := 1, locResults := []
+    PushState()
+    HttpGetAsync("https://geocoding-api.open-meteo.com/v1/search?count=6&language=en&format=json&name=" . UriEncode(q), OnLocationReply.Bind(q))
+}
+OnLocationReply(q, status, body) {
+    global locSearching, locResults
+    locSearching := 0, locResults := []
+    if (status != 200) {
+        Toast("Could not search for places: " . (status ? "the service answered " . status : body) . ".")
+        PushState()
+        return
+    }
+    pos := 1
+    while (pos := RegExMatch(body, '\{[^{}]*"latitude"[^{}]*\}', &m, pos)) {
+        o := m[0], pos += StrLen(o)
+        name := JsonText(o, "name"), lat := JsonNum(o, "latitude"), lon := JsonNum(o, "longitude")
+        if (name == "" || lat == "" || lon == "")
+            continue
+        parts := [name], a1 := JsonText(o, "admin1"), ctry := JsonText(o, "country")
+        if (a1 != "" && a1 != name)
+            parts.Push(a1)
+        if (ctry != "")
+            parts.Push(ctry)
+        locResults.Push({label: Join(parts, ", "), lat: lat, lon: lon})
+    }
+    if (locResults.Length == 0)
+        Toast("No place found for " . q . ".")
+    PushState()
+}
+HandleEnvCommand(a, b, c) {
+    global autoThemeEnabled, autoWeatherScope, autoThemeMap, AUTO_SLOTS, THEMES, locName, locLat, locLon, locResults, weatherNow, weatherFetchTick
+    global autoWeatherStrength, manualTheme, themeName, autoLastSig
+    switch a {
+        case "auto":
+            on := Integer(b) ? 1 : 0
+            if (on && !autoThemeEnabled && themeName != "Automatic")
+                manualTheme := themeName                       ; remembered for when it is turned off again
+            autoThemeEnabled := on, autoLastSig := ""
+            LogAction("[Auto theme] " . (on ? "on" : "off"))
+            if (on) {
+                SyncEnvWatch(), SaveSettings()
+                EnvTick()
+            } else {
+                SelectTheme(manualTheme)                        ; back to the theme picked before
+                return
+            }
+        case "slot":                                     ; b = slot, c = theme ("" = no change, weather slots only)
+            if (!autoThemeMap.Has(b) || (c != "" && !THEMES.Has(c)) || (c == "" && (b == "Morning" || b == "Day" || b == "Evening" || b == "Night")))
+                return
+            autoThemeMap[b] := c
+            SaveSettings()
+            if (autoThemeEnabled)
+                EnvTick()
+        case "scope":
+            autoWeatherScope := (b == "always") ? "always" : "day"
+            SaveSettings()
+            if (autoThemeEnabled)
+                EnvTick()
+        case "strength":
+            autoWeatherStrength := Max(10, Min(100, Integer(b)))
+            SetTimer(SaveSettings, -500)
+            if (autoThemeEnabled)
+                EnvTick()
+        case "search":
+            LocationSearch(b)
+            return
+        case "pick":
+            i := Integer(b)
+            if (i < 1 || i > locResults.Length)
+                return
+            r := locResults[i]
+            locName := r.label, locLat := r.lat, locLon := r.lon, locResults := []
+            weatherNow := {kind: "", code: "", text: "", temp: "", at: "", tick: 0, error: ""}, weatherFetchTick := 0
+            LogAction("[Weather] place set to " . locName . " (" . locLat . ", " . locLon . ")")
+            SaveSettings()
+            UpdateSkyPalette()
+            FetchWeather()
+            EnvTick()
+        case "clearPlace":
+            locName := "", locLat := "", locLon := "", locResults := []
+            weatherNow := {kind: "", code: "", text: "", temp: "", at: "", tick: 0, error: ""}, weatherFetchTick := 0
+            SaveSettings()
+            EnvTick()
+        case "refresh":
+            FetchWeather()
+    }
+    PushState()
+}
+; For the page: settings, the place, the weather and a plain-language status line.
+EnvState() {
+    global autoThemeEnabled, autoWeatherScope, autoThemeMap, AUTO_SLOTS, locName, locLat, locLon, locResults, locSearching, weatherNow, autoWeatherStrength
+    tod := TimeOfDayNow()
+    sun := SunTimesToday()
+    k := CurrentWeatherKind()
+    if !HasPlace()
+        status := "Now: " . tod.slot . " (by the clock: morning 06:00, day 09:00, evening 17:00, night 20:30). Choose a place for real sunrise and sunset, and the weather."
+    else {
+        status := "Now: " . tod.slot
+        if (k != "")
+            status .= ", " . StrLower(weatherNow.text) . (weatherNow.temp != "" ? ", " . Round(Float(weatherNow.temp)) . " °C" : "")
+        status .= "."
+        if IsObject(sun)
+            status .= (sun.rise != "" ? " Sunrise " . sun.rise . "," : "") . (sun.set != "" ? " sunset " . sun.set . "." : "")
+    }
+    blend := AutoBlendNow(tod), pct := Map()
+    for slotName, w in blend.weights
+        pct[slotName] := Round(w * 100)
+    if (blend.weather > 0)
+        pct[blend.kind] := Round(blend.weather * 100)
+    wline := ""
+    if HasPlace()
+        wline := (weatherNow.error != "") ? "Weather could not be updated: " . weatherNow.error . "." : (weatherNow.at != "" ? "Weather updated at " . weatherNow.at . "." : "Getting the weather...")
+    return {auto: autoThemeEnabled, scope: autoWeatherScope, slots: AUTO_SLOTS, map: autoThemeMap, tod: tod.slot, weather: k,
+            place: locName, located: HasPlace() ? 1 : 0, results: locResults, searching: locSearching,
+            status: status, wline: wline, showing: blend.label, weights: pct, strength: autoWeatherStrength,
+            weatherUsed: blend.weather > 0 ? 1 : 0}
+}
+
+; =========================================================================
 ; 💾 DEFAULTS + PERSISTENCE (same INI layout as v5)
 ; =========================================================================
 FactoryState() {
@@ -2131,11 +3389,18 @@ FactoryState() {
     s["MaxSoftwareDarkness"] := 180, s["LinkHardwareSoftware"] := 1, s["LinkAllDisplays"] := 0
     s["TargetMonitorIDs"] := "2", s["InvertCurve"] := 0, s["Theme"] := "Lava Orange", s["Glass"] := 0, s["GlassOpacity"] := 65
     s["HotkeyUp"] := "^Up", s["HotkeyDown"] := "^Down", s["HotkeySWUp"] := "#Up", s["HotkeySWDown"] := "#Down"
-    s["HotkeyFlip"] := "", s["PrimaryGuard"] := 0, s["WpIntensity"] := 70, s["WpFrost"] := 0
+    s["HotkeyFlip"] := "", s["PrimaryGuard"] := 0, s["WpIntensity"] := 70, s["WpFrost"] := 0, s["Lively"] := 1
+    s["Warmth"] := 0, s["Smooth"] := 1, s["Osd"] := 1, s["FreeMemory"] := 1
+    s["WS_Enabled"] := 0, s["WS_Fade"] := 60
+    s["Env_Auto"] := 0, s["Env_Scope"] := "always", s["Env_Strength"] := 45, s["Env_Place"] := "", s["Env_Lat"] := "", s["Env_Lon"] := ""
+    for slotName, th in DefaultAutoThemeMap()
+        s["Env_" slotName] := th
+    for ph in DefaultWarmPhases()
+        s["WS_" ph.name "_From"] := ph.time, s["WS_" ph.name "_Level"] := ph.level
     s["HardwareBright"] := 50, s["SoftwareDim"] := 50
     Loop 8 {
         n := A_Index
-        s["Split_M" n] := 0, s["HW_M" n] := 50, s["SW_M" n] := 50, s["Dim_M" n] := 1
+        s["Split_M" n] := 0, s["HW_M" n] := 50, s["SW_M" n] := 50, s["Dim_M" n] := 1, s["Warm_M" n] := 1
         for kind in ["HWUp", "HWDown", "SWUp", "SWDown"]
             s["HK_" n "_" kind] := ""
     }
@@ -2154,13 +3419,20 @@ CollectState() {
     global hardwareStep, dimmingCurve, exponentialFactor, maxSoftwareDarkness, linkHardwareSoftware, linkAllDisplays, externalMonitorNum
     global invertCurve, hotkeyUpString, hotkeyDoString, hotkeySWUpString, hotkeySWDoString, currentHardwareBright, currentSoftwareDim
     global monitorSplitMode, monitorHW, monitorSW, dimStates, themeName, COLOR_SLOTS, THEMES, glassEnabled, glassOpacity
-    global schedEnabled, schedFade, schedIncludeIndependent, SCHED_ROWS, hotkeyFlipString, primaryGuardEnabled, wpIntensity, wpFrost
+    global schedEnabled, schedFade, schedIncludeIndependent, SCHED_ROWS, hotkeyFlipString, primaryGuardEnabled, wpIntensity, wpFrost, livelyEffects, warmth, smoothTransitions, osdEnabled, warmStates, warmSchedEnabled, warmFadeMin, warmPhases, autoThemeEnabled, autoWeatherScope, autoThemeMap, locName, locLat, locLon, autoWeatherStrength, manualTheme, memorySaver
     s := Map()
     s["HardwareStep"] := hardwareStep, s["CurveType"] := dimmingCurve, s["ExponentialFactor"] := exponentialFactor
     s["MaxSoftwareDarkness"] := maxSoftwareDarkness, s["LinkHardwareSoftware"] := linkHardwareSoftware
     s["LinkAllDisplays"] := linkAllDisplays, s["TargetMonitorIDs"] := externalMonitorNum, s["InvertCurve"] := invertCurve, s["Theme"] := themeName
     s["Glass"] := glassEnabled, s["GlassOpacity"] := glassOpacity
-    s["HotkeyFlip"] := hotkeyFlipString, s["PrimaryGuard"] := primaryGuardEnabled, s["WpIntensity"] := wpIntensity, s["WpFrost"] := wpFrost
+    s["HotkeyFlip"] := hotkeyFlipString, s["PrimaryGuard"] := primaryGuardEnabled, s["WpIntensity"] := wpIntensity, s["WpFrost"] := wpFrost, s["Lively"] := livelyEffects
+    s["Warmth"] := warmth, s["Smooth"] := smoothTransitions, s["Osd"] := osdEnabled, s["FreeMemory"] := memorySaver
+    s["WS_Enabled"] := warmSchedEnabled, s["WS_Fade"] := warmFadeMin
+    s["Env_Auto"] := autoThemeEnabled, s["Env_Scope"] := autoWeatherScope, s["Env_Strength"] := autoWeatherStrength, s["Env_Place"] := locName, s["Env_Lat"] := locLat, s["Env_Lon"] := locLon
+    for slotName, th in autoThemeMap
+        s["Env_" slotName] := th
+    for ph in warmPhases
+        s["WS_" ph.name "_From"] := ph.time, s["WS_" ph.name "_Level"] := ph.level
     s["HotkeyUp"] := hotkeyUpString, s["HotkeyDown"] := hotkeyDoString, s["HotkeySWUp"] := hotkeySWUpString, s["HotkeySWDown"] := hotkeySWDoString
     s["HardwareBright"] := currentHardwareBright, s["SoftwareDim"] := currentSoftwareDim
     Loop 8 {
@@ -2169,6 +3441,7 @@ CollectState() {
         s["HW_M" n] := monitorHW.Has(n) ? monitorHW[n] : currentHardwareBright
         s["SW_M" n] := monitorSW.Has(n) ? monitorSW[n] : currentSoftwareDim
         s["Dim_M" n] := dimStates.Has(n) ? dimStates[n] : 1
+        s["Warm_M" n] := IsWarmTarget(n)
         for kind in ["HWUp", "HWDown", "SWUp", "SWDown"]
             s["HK_" n "_" kind] := GetMonitorHotkey(n, kind)
     }
@@ -2203,14 +3476,45 @@ ReadStateFromIni(section) {
 SetGlobalsFromState(s) {
     global hardwareStep, dimmingCurve, exponentialFactor, maxSoftwareDarkness, linkHardwareSoftware, linkAllDisplays, externalMonitorNum
     global invertCurve, hotkeyUpString, hotkeyDoString, hotkeySWUpString, hotkeySWDoString, currentHardwareBright, currentSoftwareDim
-    global monitorSplitMode, monitorHW, monitorSW, dimStates, COLOR_SLOTS, THEMES, monitorHotkeys, themeName, glassEnabled, glassOpacity
-    global schedEnabled, schedFade, schedIncludeIndependent, SCHED_ROWS, hotkeyFlipString, primaryGuardEnabled, wpIntensity, wpFrost
+    global monitorSplitMode, monitorHW, monitorSW, dimStates, COLOR_SLOTS, THEMES, monitorHotkeys, themeName, glassEnabled, glassOpacity, AUTO_SLOTS
+    global schedEnabled, schedFade, schedIncludeIndependent, SCHED_ROWS, hotkeyFlipString, primaryGuardEnabled, wpIntensity, wpFrost, livelyEffects, warmth, smoothTransitions, osdEnabled, warmStates, warmSchedEnabled, warmFadeMin, warmPhases, autoThemeEnabled, autoWeatherScope, autoThemeMap, locName, locLat, locLon, autoWeatherStrength, manualTheme, memorySaver
     if (s.Has("HotkeyFlip"))
         hotkeyFlipString := s["HotkeyFlip"]
     if (s.Has("WpIntensity") && IsNumber(s["WpIntensity"]))
         wpIntensity := Max(25, Min(100, Integer(s["WpIntensity"])))
     if (s.Has("WpFrost") && IsNumber(s["WpFrost"]))
         wpFrost := Integer(s["WpFrost"]) ? 1 : 0
+    if (s.Has("Lively") && IsNumber(s["Lively"]))
+        livelyEffects := Integer(s["Lively"]) ? 1 : 0
+    if (s.Has("Warmth") && IsNumber(s["Warmth"]))
+        warmth := Clamp(s["Warmth"])
+    if (s.Has("Smooth") && IsNumber(s["Smooth"]))
+        smoothTransitions := Integer(s["Smooth"]) ? 1 : 0
+    if (s.Has("Osd") && IsNumber(s["Osd"]))
+        osdEnabled := Integer(s["Osd"]) ? 1 : 0
+    if (s.Has("FreeMemory") && IsNumber(s["FreeMemory"]))
+        memorySaver := Integer(s["FreeMemory"]) ? 1 : 0
+    if (s.Has("Env_Auto") && IsNumber(s["Env_Auto"]))
+        autoThemeEnabled := Integer(s["Env_Auto"]) ? 1 : 0
+    if s.Has("Env_Scope")
+        autoWeatherScope := (s["Env_Scope"] == "always") ? "always" : "day"
+    if (s.Has("Env_Strength") && IsNumber(s["Env_Strength"]))
+        autoWeatherStrength := Max(10, Min(100, Integer(s["Env_Strength"])))
+    for slotName in AUTO_SLOTS
+        if (s.Has("Env_" slotName) && (s["Env_" slotName] == "" ? !(slotName == "Morning" || slotName == "Day" || slotName == "Evening" || slotName == "Night") : THEMES.Has(s["Env_" slotName])))
+            autoThemeMap[slotName] := s["Env_" slotName]
+    if (s.Has("Env_Lat") && s.Has("Env_Lon") && s.Has("Env_Place"))
+        locName := s["Env_Place"], locLat := s["Env_Lat"], locLon := s["Env_Lon"]
+    if (s.Has("WS_Enabled") && IsNumber(s["WS_Enabled"]))
+        warmSchedEnabled := Integer(s["WS_Enabled"]) ? 1 : 0
+    if (s.Has("WS_Fade") && IsNumber(s["WS_Fade"]))
+        warmFadeMin := Max(0, Min(180, Integer(s["WS_Fade"])))
+    for ph in warmPhases {
+        if (s.Has("WS_" ph.name "_From") && ParseHHMM(s["WS_" ph.name "_From"], &tmpMins))
+            ph.time := Format("{:02}:{:02}", tmpMins // 60, Mod(tmpMins, 60))
+        if (s.Has("WS_" ph.name "_Level") && IsNumber(s["WS_" ph.name "_Level"]))
+            ph.level := Clamp(s["WS_" ph.name "_Level"])
+    }
     if (s.Has("PrimaryGuard") && IsNumber(s["PrimaryGuard"]))
         SetPrimaryGuard(Integer(s["PrimaryGuard"]))
     if (s.Has("Glass") && IsNumber(s["Glass"]))
@@ -2245,10 +3549,11 @@ SetGlobalsFromState(s) {
     }
     hotkeyUpString := s["HotkeyUp"], hotkeyDoString := s["HotkeyDown"], hotkeySWUpString := s["HotkeySWUp"], hotkeySWDoString := s["HotkeySWDown"]
     currentHardwareBright := Integer(s["HardwareBright"]), currentSoftwareDim := Integer(s["SoftwareDim"])
-    monitorSplitMode := Map(), monitorHW := Map(), monitorSW := Map(), dimStates := Map()
+    monitorSplitMode := Map(), monitorHW := Map(), monitorSW := Map(), dimStates := Map(), warmStates := Map()
     Loop 8 {
         n := A_Index
         monitorSplitMode[n] := Integer(s["Split_M" n]), monitorHW[n] := Integer(s["HW_M" n]), monitorSW[n] := Integer(s["SW_M" n]), dimStates[n] := Integer(s["Dim_M" n])
+        warmStates[n] := (s.Has("Warm_M" n) && IsNumber(s["Warm_M" n])) ? (Integer(s["Warm_M" n]) ? 1 : 0) : 1
     }
     if (s.Has("Sched_Enabled")) {
         schedEnabled := Integer(s["Sched_Enabled"]), schedFade := Max(0, Min(120, Integer(s["Sched_Fade"]))), schedIncludeIndependent := Integer(s["Sched_IncludeIndependent"])
@@ -2262,6 +3567,13 @@ ApplyStateAndRefresh(s) {
     SetGlobalsFromState(s)
     UpdateActiveHotkeys()
     SetScheduleEnabled(schedEnabled)
+    SetWarmScheduleEnabled(warmSchedEnabled)
+    UpdateSkyPalette()
+    if (themeName == "Automatic" && !autoThemeEnabled)
+        themeName := manualTheme
+    if (autoThemeEnabled)
+        UpdateAutoPalette(), themeName := "Automatic"
+    SyncEnvWatch()
     ApplyThemeToHosts()
     UpdateDisplayState(), SaveSettings(), PushState()
 }
@@ -2269,9 +3581,18 @@ SaveSettings() {
     global iniFile, dimmingCurve, exponentialFactor, maxSoftwareDarkness, linkHardwareSoftware, linkAllDisplays, externalMonitorNum
     global hotkeyUpString, hotkeyDoString, hotkeySWUpString, hotkeySWDoString, hardwareStep, invertCurve
     global monitorSplitMode, monitorHW, monitorSW, dimStates, useDefaultsAtStartup, themeName, glassEnabled, glassOpacity
-    global schedEnabled, schedFade, schedIncludeIndependent, SCHED_ROWS, hotkeyFlipString, primaryGuardEnabled, wpIntensity, wpFrost
+    global schedEnabled, schedFade, schedIncludeIndependent, SCHED_ROWS, hotkeyFlipString, primaryGuardEnabled, wpIntensity, wpFrost, livelyEffects, warmth, smoothTransitions, osdEnabled, warmStates, warmSchedEnabled, warmFadeMin, warmPhases, autoThemeEnabled, autoWeatherScope, autoThemeMap, locName, locLat, locLon, autoWeatherStrength, manualTheme, memorySaver
     try {
-        IniWrite(wpIntensity, iniFile, "Settings", "WpIntensity"), IniWrite(wpFrost, iniFile, "Settings", "WpFrost")
+        IniWrite(wpIntensity, iniFile, "Settings", "WpIntensity"), IniWrite(wpFrost, iniFile, "Settings", "WpFrost"), IniWrite(livelyEffects, iniFile, "Settings", "Lively")
+        IniWrite(warmth, iniFile, "Settings", "Warmth"), IniWrite(smoothTransitions, iniFile, "Settings", "Smooth"), IniWrite(osdEnabled, iniFile, "Settings", "Osd"), IniWrite(memorySaver, iniFile, "Settings", "FreeMemory")
+        IniWrite(warmSchedEnabled, iniFile, "WarmSchedule", "Enabled"), IniWrite(warmFadeMin, iniFile, "WarmSchedule", "FadeMinutes")
+        IniWrite(autoThemeEnabled, iniFile, "Environment", "AutoTheme"), IniWrite(autoWeatherScope, iniFile, "Environment", "WeatherScope")
+        IniWrite(autoWeatherStrength, iniFile, "Environment", "WeatherStrength"), IniWrite(manualTheme, iniFile, "Environment", "ManualTheme")
+        IniWrite(locName, iniFile, "Environment", "Place"), IniWrite(locLat, iniFile, "Environment", "Latitude"), IniWrite(locLon, iniFile, "Environment", "Longitude")
+        for slotName, th in autoThemeMap
+            IniWrite(th, iniFile, "Environment", "Theme_" . slotName)
+        for ph in warmPhases
+            IniWrite(ph.time, iniFile, "WarmSchedule", ph.name . "From"), IniWrite(ph.level, iniFile, "WarmSchedule", ph.name . "Level")
         IniWrite(glassEnabled, iniFile, "Settings", "Glass"), IniWrite(glassOpacity, iniFile, "Settings", "GlassOpacity")
         IniWrite(hotkeyFlipString, iniFile, "Settings", "HotkeyFlip"), IniWrite(primaryGuardEnabled, iniFile, "Settings", "PrimaryGuard")
         IniWrite(hotkeyUpString, iniFile, "Settings", "HotkeyUp"), IniWrite(hotkeyDoString, iniFile, "Settings", "HotkeyDown")
@@ -2280,6 +3601,8 @@ SaveSettings() {
         IniWrite(useDefaultsAtStartup, iniFile, "Settings", "UseDefaultsAtStartup"), IniWrite(themeName, iniFile, "Settings", "Theme")
         for mIdx, v in dimStates
             IniWrite(v, iniFile, "Settings", "Dim_M" . mIdx)
+        for mIdx, v in warmStates
+            IniWrite(v, iniFile, "Settings", "Warm_M" . mIdx)
         IniWrite(dimmingCurve, iniFile, "Settings", "CurveType"), IniWrite(exponentialFactor, iniFile, "Settings", "ExponentialFactor")
         IniWrite(maxSoftwareDarkness, iniFile, "Settings", "MaxSoftwareDarkness"), IniWrite(linkHardwareSoftware, iniFile, "Settings", "LinkHardwareSoftware")
         IniWrite(linkAllDisplays, iniFile, "Settings", "LinkAllDisplays"), IniWrite(externalMonitorNum, iniFile, "Settings", "TargetMonitorIDs")
@@ -2303,11 +3626,35 @@ SaveSettings() {
 LoadSettings() {
     global iniFile, dimmingCurve, exponentialFactor, maxSoftwareDarkness, linkHardwareSoftware, linkAllDisplays, externalMonitorNum
     global hotkeyUpString, hotkeyDoString, hotkeySWUpString, hotkeySWDoString, hardwareStep, invertCurve, themeName
-    global monitorSplitMode, monitorHW, monitorSW, dimStates, useDefaultsAtStartup, monitorHotkeys, THEMES, glassEnabled, glassOpacity
-    global schedEnabled, schedFade, schedIncludeIndependent, SCHED_ROWS, hotkeyFlipString, primaryGuardEnabled, wpIntensity, wpFrost
+    global monitorSplitMode, monitorHW, monitorSW, dimStates, useDefaultsAtStartup, monitorHotkeys, THEMES, glassEnabled, glassOpacity, AUTO_SLOTS
+    global schedEnabled, schedFade, schedIncludeIndependent, SCHED_ROWS, hotkeyFlipString, primaryGuardEnabled, wpIntensity, wpFrost, livelyEffects, warmth, smoothTransitions, osdEnabled, warmStates, warmSchedEnabled, warmFadeMin, warmPhases, autoThemeEnabled, autoWeatherScope, autoThemeMap, locName, locLat, locLon, autoWeatherStrength, manualTheme, memorySaver
     try {
         wpIntensity := IsNumber(tmp := IniRead(iniFile, "Settings", "WpIntensity", "")) ? Max(25, Min(100, Integer(tmp))) : 70
         wpFrost := IsNumber(tmp := IniRead(iniFile, "Settings", "WpFrost", "")) ? (Integer(tmp) ? 1 : 0) : 0
+        livelyEffects := IsNumber(tmp := IniRead(iniFile, "Settings", "Lively", "")) ? (Integer(tmp) ? 1 : 0) : 1
+        warmth := IsNumber(tmp := IniRead(iniFile, "Settings", "Warmth", "")) ? Clamp(tmp) : 0
+        smoothTransitions := IsNumber(tmp := IniRead(iniFile, "Settings", "Smooth", "")) ? (Integer(tmp) ? 1 : 0) : 1
+        osdEnabled := IsNumber(tmp := IniRead(iniFile, "Settings", "Osd", "")) ? (Integer(tmp) ? 1 : 0) : 1
+        memorySaver := IsNumber(tmp := IniRead(iniFile, "Settings", "FreeMemory", "")) ? (Integer(tmp) ? 1 : 0) : 1
+        warmSchedEnabled := IsNumber(tmp := IniRead(iniFile, "WarmSchedule", "Enabled", "")) ? (Integer(tmp) ? 1 : 0) : 0
+        autoThemeEnabled := IsNumber(tmp := IniRead(iniFile, "Environment", "AutoTheme", "")) ? (Integer(tmp) ? 1 : 0) : 0
+        autoWeatherScope := (IniRead(iniFile, "Environment", "WeatherScope", "always") == "day") ? "day" : "always"
+        autoWeatherStrength := IsNumber(tmp := IniRead(iniFile, "Environment", "WeatherStrength", "")) ? Max(10, Min(100, Integer(tmp))) : 45
+        tmp := IniRead(iniFile, "Environment", "ManualTheme", "")
+        manualTheme := (THEMES.Has(tmp) && tmp != "Automatic") ? tmp : ((themeName != "Automatic") ? themeName : "Lava Orange")
+        locName := IniRead(iniFile, "Environment", "Place", ""), locLat := IniRead(iniFile, "Environment", "Latitude", ""), locLon := IniRead(iniFile, "Environment", "Longitude", "")
+        for slotName in AUTO_SLOTS {
+            th := IniRead(iniFile, "Environment", "Theme_" . slotName, Chr(1))
+            if (th != Chr(1) && (th == "" ? !(slotName == "Morning" || slotName == "Day" || slotName == "Evening" || slotName == "Night") : THEMES.Has(th)))
+                autoThemeMap[slotName] := th
+        }
+        warmFadeMin := IsNumber(tmp := IniRead(iniFile, "WarmSchedule", "FadeMinutes", "")) ? Max(0, Min(180, Integer(tmp))) : 60
+        for ph in warmPhases {
+            if ParseHHMM(IniRead(iniFile, "WarmSchedule", ph.name . "From", ""), &tmpMins)
+                ph.time := Format("{:02}:{:02}", tmpMins // 60, Mod(tmpMins, 60))
+            if IsNumber(tmp := IniRead(iniFile, "WarmSchedule", ph.name . "Level", ""))
+                ph.level := Clamp(tmp)
+        }
         hotkeyFlipString := IniRead(iniFile, "Settings", "HotkeyFlip", "")
         primaryGuardEnabled := IsNumber(tmp := IniRead(iniFile, "Settings", "PrimaryGuard", "")) ? (Integer(tmp) ? 1 : 0) : 0
         glassEnabled := IsNumber(tmp := IniRead(iniFile, "Settings", "Glass", "")) ? (Integer(tmp) ? 1 : 0) : 0
@@ -2348,6 +3695,9 @@ LoadSettings() {
             dimVal := IniRead(iniFile, "Settings", "Dim_M" . n, "")
             if IsNumber(dimVal)
                 dimStates[n] := Integer(dimVal)
+            warmVal := IniRead(iniFile, "Settings", "Warm_M" . n, "")
+            if IsNumber(warmVal)
+                warmStates[n] := Integer(warmVal) ? 1 : 0
             for kind in ["HWUp", "HWDown", "SWUp", "SWDown"] {
                 hk := IniRead(iniFile, "MonitorHotkeys", n . "_" . kind, "")
                 if (hk != "")
@@ -2360,31 +3710,101 @@ LoadSettings() {
 ; =========================================================================
 ; 🚀 STARTUP / EXIT
 ; =========================================================================
-if (!EnsureUiFiles()) {
-    MsgBox("The UI files could not be prepared:`n" . uiHtmlPath . "`n" . wvLoaderPath, "Smart Dimmer", "Iconx")
-    ExitApp
+; The brightness engine (hotkeys, schedule, primary-display guard) starts first and never depends on the
+; window: if WebView2 is not ready yet (typical right after logon on slower PCs, or while the runtime
+; updates), window creation is retried with growing delays instead of aborting the app.
+global uiReady := false, uiLastError := "", uiRetryIdx := 0, uiGaveUp := false
+global UI_RETRY_DELAYS := [3, 5, 10, 15, 30, 60]          ; seconds between attempts after the first one
+
+IsLogonLaunch() {
+    for a in A_Args
+        if (a = "/startup")
+            return true
+    return A_TickCount < 180000                             ; started within 3 minutes of boot
 }
-try {
-    flyout := CreateHostWindow("flyout", 340, 380)
-    settings := CreateHostWindow("settings", 760, 540)
-} catch as e {
-    LogAction("[UI] startup failed: " . e.Message . " (" . e.What . ") " . e.Extra)
-    MsgBox("Could not start the WebView2 user interface.`n`n" . e.Message . "`n`nThe Microsoft Edge WebView2 runtime must be installed (it comes with Windows 10/11 updates).", "Smart Dimmer", "Iconx")
-    ExitApp
+WaitForDesktop() {
+    t0 := A_TickCount
+    while (!WinExist("ahk_class Shell_TrayWnd") && A_TickCount - t0 < 60000)
+        Sleep(500)
+    Sleep(4000)                                             ; let the shell and the WebView2 runtime settle
+    LogAction("[UI] logon start: desktop ready after " . (A_TickCount - t0) . " ms")
 }
+TryCreateHosts() {
+    global flyout, settings, uiReady, uiLastError, wvEnv, framelessHwnds, themeName
+    if (uiReady)
+        return true
+    f := "", s := ""
+    try {
+        f := CreateHostWindow("flyout", 340, 380)
+        s := CreateHostWindow("settings", 760, 540)
+    } catch as e {
+        uiLastError := e.Message
+        LogAction("[UI] window creation failed: " . ErrText(e))
+        for h in [f, s]
+            if (h != "") {
+                try h.ctl.Close()
+                try framelessHwnds.Delete(h.hwnd)
+                try h.gui.Destroy()
+            }
+        wvEnv := ""
+        return false
+    }
+    flyout := f, settings := s, uiReady := true
+    SyncWallpaperWatch()
+    if (themeName == "Wallpaper")
+        ApplyThemeToHosts()
+    LogAction("[UI] windows ready")
+    return true
+}
+RetryCreateHosts() {
+    global uiRetryIdx, UI_RETRY_DELAYS, uiGaveUp, uiLastError
+    if (TryCreateHosts())
+        return
+    uiRetryIdx++
+    if (uiRetryIdx <= UI_RETRY_DELAYS.Length) {
+        LogAction("[UI] retrying in " . UI_RETRY_DELAYS[uiRetryIdx] . " s (attempt " . (uiRetryIdx + 1) . ")")
+        SetTimer(RetryCreateHosts, -UI_RETRY_DELAYS[uiRetryIdx] * 1000)
+        return
+    }
+    uiGaveUp := true
+    LogAction("[UI] giving up on the window for now; hotkeys and the schedule keep working")
+    try TrayTip("Smart Dimmer is running (hotkeys and schedule work), but its window could not open:`n" . uiLastError . "`nClick the tray icon to try again.", "Smart Dimmer", "Iconx")
+}
+; Opening the window by hand (tray click, menu, hotkey) tries again at once if it is not ready yet.
+EnsureUiReady() {
+    global uiReady, uiLastError
+    if (uiReady || TryCreateHosts())
+        return true
+    MsgBox("Smart Dimmer could not open its window:`n`n" . uiLastError . "`n`nHotkeys and the schedule keep working. The window needs the Microsoft Edge WebView2 Runtime; if the problem persists, install or repair it from https://developer.microsoft.com/microsoft-edge/webview2/", "Smart Dimmer", "Iconx")
+    return false
+}
+
+if (!EnsureUiFiles())
+    LogAction("[UI] the UI files could not be prepared in " . dataDir)
 SetupTrayMenu()
-RegisterDisplayPowerNotification(flyout.hwnd)
-SyncWallpaperWatch()
-if (themeName == "Wallpaper")
-    ApplyThemeToHosts()
+RegisterDisplayPowerNotification(A_ScriptHwnd)
 if (primaryGuardEnabled)
     SetPrimaryGuard(1)
 SetTimer(() => UpdateDisplayState(), -200)
 if (schedEnabled)
     SetTimer(() => SetScheduleEnabled(1), -1500)
+if (warmSchedEnabled)
+    SetTimer(() => SetWarmScheduleEnabled(1), -1600)
+UpdateSkyPalette()                                        ; the Sky and automatic palettes before the windows open; weather follows
+if (themeName == "Automatic" && !autoThemeEnabled)
+    themeName := manualTheme
+if (autoThemeEnabled)
+    UpdateAutoPalette(), themeName := "Automatic"
+SyncEnvWatch()
+if (autoThemeEnabled || themeName == "Sky")
+    SetTimer(EnvTick, -2500)
+UpdateStartupShortcut()
 OnExit(OnScriptExit)
 Persistent()
-LogAction("[UI] startup complete")
+if (IsLogonLaunch())
+    WaitForDesktop()
+RetryCreateHosts()
+LogAction("[UI] startup complete (window " . (uiReady ? "ready" : "pending") . ")")
 OnScriptExit(*) {
     global flyout, settings, powerNotifyHandle
     try SetTimer(CheckFocusLoss, 0)
@@ -2401,5 +3821,5 @@ OnScriptExit(*) {
         if (h != "")
             try h.ctl.Close()
     }
-    ResetAllGammaRamps()
+    try ResetAllGammaRamps()
 }
